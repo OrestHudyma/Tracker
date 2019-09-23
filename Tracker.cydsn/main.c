@@ -28,7 +28,6 @@ char NMEA_GPRMC[NMEA_MAX_SIZE] = "GPRMC";
 
 uint8 NMEA_pointer;
 
-
 void NMEA_handle_packet();
 void wake_up_handler();
 
@@ -105,10 +104,11 @@ void NMEA_GetField(char *packet, uint8 field, char *result)
 
 void NMEA_handle_packet(char *packet, char *NMEA_data)
 {
-    uint8 i;
+    uint8 i, n;
     uint8 error = 0;
     uint8 checksum = 0;
-    char string_checksum[3];
+    char packet_checksum[3];
+    char calculated_checksum[3];
     
     // Check for receive errors
     for(i = 0; i < NMEA_MAX_SIZE; i++)
@@ -129,15 +129,20 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
         {
             if (packet[i] == NMEA_CHECKSUM_DELIMITER) break;
         }
-        //packet[i] = 0;
+        packet[i] = 0;
         
-        string_checksum[0] = packet[i+1];
-        string_checksum[1] = packet[i+2];
-        string_checksum[2] = 0;
+        packet_checksum[0] = packet[i+1];
+        packet_checksum[1] = packet[i+2];
+        packet_checksum[2] = 0;
         
         // Calculate checksum and compare
-        //while(*packet) checksum ^= *packet++;
-        //if (checksum != atoi(string_checksum)) error++;
+        for (n = 0; n < i; n++)
+        {
+            checksum ^= packet[n];
+        }
+        itoa(checksum, calculated_checksum, 16);
+        if (calculated_checksum[0] != packet_checksum[0]) error++;
+        if (calculated_checksum[1] != packet_checksum[1]) error++;
     }   
     
     // Copy buffer to NMEA packet if no errors found
