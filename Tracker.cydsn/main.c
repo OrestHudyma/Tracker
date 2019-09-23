@@ -26,9 +26,12 @@
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GPRMC";
 
+char tmp[NMEA_MAX_SIZE];
+
 uint8 NMEA_pointer;
 
 void NMEA_handle_packet();
+void NMEA_GetField(char *packet, uint8 field, char *result);
 void wake_up_handler();
 
 CY_ISR(GPS_receive)
@@ -42,10 +45,7 @@ CY_ISR(GPS_receive)
         break;
         
         case NMEA_END_DELIMITER:
-        if (NMEA_buffer[2] == 'R')
-        {
-            NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
-        }
+        NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
         Pin_GPS_RxLED_Write(0);
         break;
         
@@ -67,8 +67,8 @@ int main(void)
     
     for(;;)
     {
-       
-        
+       CyDelay(1000);
+       NMEA_GetField(NMEA_GPRMC, 0, tmp);        
     }
 }
 
@@ -86,20 +86,20 @@ void NMEA_GetField(char *packet, uint8 field, char *result)
     {
         if (packet[i] == NMEA_FIELD_DELIMITER) count++;
     }
-    i++;
     
     // Measure field size
     for (count = 0; count < NMEA_MAX_SIZE; count++)
     {
-        if (packet[i + count] != 0x0D) break;
-        if (packet[i + count] != ',') break;
+        if (packet[i + count] == 0x0D) break;
+        if (packet[i + count] == NMEA_FIELD_DELIMITER) break;
     }    
     
     // Copy field to result
     for (n = 0; n < count; n++)
     {
         result[n] = packet[i+n];
-    }    
+    }
+    result[n+1] = 0; // Add null terminator
 }
 
 void NMEA_handle_packet(char *packet, char *NMEA_data)
