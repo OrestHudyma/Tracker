@@ -18,3 +18,4 @@ BUILD.log
 *.uvopt
 *.uvproj
 *.html
+*.log

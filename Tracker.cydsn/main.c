@@ -12,7 +12,16 @@
 #include "project.h"
 #include <stdlib.h>
 
-#define NMEA_MAX_SIZE       82
+#define NMEA_MAX_SIZE             82
+#define NMEA_START_DELIMITER      '$'
+#define NMEA_END_DELIMITER        0x0A
+#define NMEA_CHECKSUM_DELIMITER   '*'
+#define NMEA_FIELD_DELIMITER      ','
+
+#define NMEA_GPRMC_LATITUDE         3
+#define NMEA_GPRMC_LONGITUDE        5
+#define NMEA_GPRMC_UTC              1
+#define NMEA_GPRMC_SPEED            7
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GPRMC";
@@ -24,16 +33,25 @@ void NMEA_handle_packet();
 void wake_up_handler();
 
 CY_ISR(GPS_receive)
-{
+{    
     NMEA_buffer[NMEA_pointer] = UART_GPS_GetByte();
     switch(NMEA_buffer[NMEA_pointer])
     {
-        case '$':
+        case NMEA_START_DELIMITER:
         NMEA_pointer = 0;
+        Pin_GPS_RxLED_Write(1);
         break;
         
-        case 0x0A:
-        NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
+        case NMEA_END_DELIMITER:
+        if (NMEA_buffer[2] == 'R')
+        {
+            NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
+        }
+        Pin_GPS_RxLED_Write(0);
+        break;
+        
+        default:
+        NMEA_pointer++;
         break;
     }
 }
@@ -44,12 +62,13 @@ int main(void)
     CyGlobalIntEnable; /* Enable global interrupts. */
     
     isr_GPS_received_StartEx(GPS_receive);
+    UART_GPS_Start();
 
     CySysWdtSetInterruptCallback(CY_SYS_WDT_COUNTER2, (cyWdtCallback) wake_up_handler);
     
     for(;;)
     {
-        CySysPmDeepSleep();
+       
         
     }
 }
@@ -66,7 +85,7 @@ void NMEA_GetField(char *packet, uint8 field, char *result)
     // Search field
     for (i = 0; (i < NMEA_MAX_SIZE) & (count < field); i++)
     {
-        if (packet[i]==',') count++;
+        if (packet[i] == NMEA_FIELD_DELIMITER) count++;
     }
     i++;
     
@@ -84,7 +103,7 @@ void NMEA_GetField(char *packet, uint8 field, char *result)
     }    
 }
 
-void NMEA_handle_packet(char * packet, char * NMEA_data)
+void NMEA_handle_packet(char *packet, char *NMEA_data)
 {
     uint8 i;
     uint8 error = 0;
@@ -108,27 +127,28 @@ void NMEA_handle_packet(char * packet, char * NMEA_data)
         // Find checksum field
         for(i = 0; i < NMEA_MAX_SIZE; i++)
         {
-            if (packet[i] == '*') break;
+            if (packet[i] == NMEA_CHECKSUM_DELIMITER) break;
         }
-        packet[i] = 0;
+        //packet[i] = 0;
         
         string_checksum[0] = packet[i+1];
         string_checksum[1] = packet[i+2];
         string_checksum[2] = 0;
         
         // Calculate checksum and compare
-        while(*packet) checksum ^= *packet++;
-        if (checksum != atoi(string_checksum)) error++;
+        //while(*packet) checksum ^= *packet++;
+        //if (checksum != atoi(string_checksum)) error++;
     }   
     
     // Copy buffer to NMEA packet if no errors found
     if (!error)
     {
-        if ((packet[3] == NMEA_data[3]) & (packet[4] == NMEA_data[4]) & (packet[5] == NMEA_data[5]))
+        if ((packet[2] == NMEA_data[2]) & (packet[3] == NMEA_data[3]) & (packet[4] == NMEA_data[4]))
         {
             for(i = 0; i < NMEA_MAX_SIZE; i++)
             {
                 NMEA_data[i] = packet[i];
+                Pin_GPS_RxLED_Write(1);
             }
         }
     }
