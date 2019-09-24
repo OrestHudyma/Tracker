@@ -12,6 +12,9 @@
 #include "project.h"
 #include <stdlib.h>
 
+#define GPS_FIX_TIMEOUT_SEC         500
+#define GPS_ACCURACY_DELAY_MS       5000
+
 #define NMEA_MAX_SIZE             82
 #define NMEA_START_DELIMITER      '$'
 #define NMEA_END_DELIMITER        0x0A
@@ -22,10 +25,15 @@
 #define NMEA_GPRMC_LONGITUDE        5
 #define NMEA_GPRMC_UTC              1
 #define NMEA_GPRMC_SPEED            7
+#define NMEA_GPRMC_VALIDITY         2
+
+#define NMEA_GPRMC_VALID            'A'
+#define NMEA_GPRMC_INVALID          'V'
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GPRMC";
 
+// TODO debug vars
 char tmp[NMEA_MAX_SIZE];
 
 uint8 NMEA_pointer;
@@ -33,6 +41,7 @@ uint8 NMEA_pointer;
 void NMEA_handle_packet();
 void NMEA_GetField(char *packet, uint8 field, char *result);
 uint8 str_cmp(char *str1, char *str2, uint8 start, uint8 stop);
+void str_append(char *base, char *add);
 
 void wake_up_handler();
 
@@ -43,12 +52,12 @@ CY_ISR(GPS_receive)
     {
         case NMEA_START_DELIMITER:
         NMEA_pointer = 0;
-        Pin_GPS_RxLED_Write(1);
+        //Pin_GPS_RxLED_Write(1);
         break;
         
         case NMEA_END_DELIMITER:
         NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
-        Pin_GPS_RxLED_Write(0);
+        //Pin_GPS_RxLED_Write(0);
         break;
         
         default:
@@ -59,6 +68,9 @@ CY_ISR(GPS_receive)
 
 int main(void)
 {
+    uint16 t;
+    char field_tmp[NMEA_MAX_SIZE];
+        
     CyGlobalIntEnable; /* Enable global interrupts. */
     
     isr_GPS_received_StartEx(GPS_receive);
@@ -66,10 +78,28 @@ int main(void)
 
     CySysWdtSetInterruptCallback(CY_SYS_WDT_COUNTER2, (cyWdtCallback) wake_up_handler);
     
+    
     for(;;)
     {
-       CyDelay(1000);
-       NMEA_GetField(NMEA_GPRMC, 0, tmp);        
+        CyDelay(1000); 
+        
+        // Apply power to GPS
+        //Pin_GPS_power_Write(1);
+        
+        // Wait for GPS fix
+        for(t = 0; t < GPS_FIX_TIMEOUT_SEC; t++)
+        {
+            CyDelay(1000);
+            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, field_tmp);
+            if (field_tmp[0] == NMEA_GPRMC_VALID) break;            
+        }
+        Pin_GPS_RxLED_Write(1);
+        CyDelay(GPS_ACCURACY_DELAY_MS);
+        
+        // Turn off GPS
+        //Pin_GPS_power_Write(0);
+        
+        NMEA_GetField(NMEA_GPRMC, 0, tmp);
     }
 }
 
@@ -154,7 +184,6 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
             for(i = 0; i < NMEA_MAX_SIZE; i++)
             {
                 NMEA_data[i] = packet[i];
-                Pin_GPS_RxLED_Write(1);
             }
         }
     }
@@ -168,6 +197,18 @@ uint8 str_cmp(char *str1, char *str2, uint8 start, uint8 stop)
         if (str1[i] != str2[i]) return 1;
     }
     return 0;
+}
+
+void str_append(char *base, char *add)
+{
+    uint8 i; 
+    uint8 size = strlen(base);
+    for(i = 0; i <= strlen(add); i++)
+    {
+        base[i + size] = add[i];
+    }
+    i++;
+    base[i + size] = 0;
 }
 
 /* [] END OF FILE */
