@@ -12,9 +12,13 @@
 #include "project.h"
 #include <stdlib.h>
 
-#define GPS_FIX_TIMEOUT_SEC         500
-#define GPS_ACCURACY_DELAY_MS       5000
+#define GPS_FIX_TIMEOUT_SEC            500
+#define GPS_FIX_IMPROVE_DELAY_MS       5000
 
+#define POWER_ON        1
+#define POWER_OFF       0
+
+// NMEA definitions
 #define NMEA_MAX_SIZE             82
 #define NMEA_START_DELIMITER      '$'
 #define NMEA_END_DELIMITER        0x0A
@@ -30,16 +34,21 @@
 #define NMEA_GPRMC_VALID            'A'
 #define NMEA_GPRMC_INVALID          'V'
 
+// GSM definitions
+
+#define GSM_BUFFER_SIZE            100
+
+
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GPRMC";
-
-// TODO debug vars
-char tmp[NMEA_MAX_SIZE];
-
 uint8 NMEA_pointer;
+
+char GSM_buffer[GSM_BUFFER_SIZE];
+uint8 GSM_pointer = 0;
 
 void NMEA_handle_packet();
 void NMEA_GetField(char *packet, uint8 field, char *result);
+
 uint8 str_cmp(char *str1, char *str2, uint8 start, uint8 stop);
 void str_append(char *base, char *add);
 
@@ -64,7 +73,12 @@ CY_ISR(GPS_receive)
         NMEA_pointer++;
         break;
     }
-}       
+}
+
+CY_ISR(GSM_receive)
+{  
+    GSM_buffer[GSM_pointer] = UART_GSM_UartGetChar();
+}
 
 int main(void)
 {
@@ -74,17 +88,19 @@ int main(void)
     CyGlobalIntEnable; /* Enable global interrupts. */
     
     isr_GPS_received_StartEx(GPS_receive);
+    isr_GSM_received_StartEx(GSM_receive);
+    
     UART_GPS_Start();
 
     CySysWdtSetInterruptCallback(CY_SYS_WDT_COUNTER2, (cyWdtCallback) wake_up_handler);
     
-    
     for(;;)
     {
-        CyDelay(1000); 
+        
+        /*********************** GPS *******************************/
         
         // Apply power to GPS
-        //Pin_GPS_power_Write(1);
+        Pin_GPS_power_Write(POWER_ON);
         
         // Wait for GPS fix
         for(t = 0; t < GPS_FIX_TIMEOUT_SEC; t++)
@@ -94,12 +110,16 @@ int main(void)
             if (field_tmp[0] == NMEA_GPRMC_VALID) break;            
         }
         Pin_GPS_RxLED_Write(1);
-        CyDelay(GPS_ACCURACY_DELAY_MS);
+        CyDelay(GPS_FIX_IMPROVE_DELAY_MS);
         
         // Turn off GPS
-        //Pin_GPS_power_Write(0);
+        Pin_GPS_power_Write(POWER_OFF);
+
         
-        NMEA_GetField(NMEA_GPRMC, 0, tmp);
+        /*********************** GSM *******************************/
+        
+
+        
     }
 }
 
