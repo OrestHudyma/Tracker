@@ -12,7 +12,7 @@
 #include "project.h"
 #include <stdlib.h>
 
-#define GPS_FIX_TIMEOUT_SEC            500
+#define GPS_FIX_TIMEOUT_SEC            10
 #define GPS_FIX_IMPROVE_DELAY_MS       5000
 
 #define POWER_ON        1
@@ -37,6 +37,10 @@
 // GSM definitions
 
 #define GSM_BUFFER_SIZE            100
+#define GSM_PWRKEY_DELAY_MS        1500
+#define GSM_MASTER_PHONE_NUM       "+380633584255"
+
+#define CTRL_Z                  26
 
 
 char NMEA_buffer[NMEA_MAX_SIZE];
@@ -44,6 +48,7 @@ char NMEA_GPRMC[NMEA_MAX_SIZE] = "GPRMC";
 uint8 NMEA_pointer;
 
 char GSM_buffer[GSM_BUFFER_SIZE];
+char GSM_command[GSM_BUFFER_SIZE];
 uint8 GSM_pointer = 0;
 
 void NMEA_handle_packet();
@@ -52,21 +57,26 @@ void NMEA_GetField(char *packet, uint8 field, char *result);
 uint8 str_cmp(char *str1, char *str2, uint8 start, uint8 stop);
 void str_append(char *base, char *add);
 
+char GPS_lat[NMEA_MAX_SIZE];
+char GPS_lon[NMEA_MAX_SIZE];
+char GPS_spd[NMEA_MAX_SIZE];
+
 void wake_up_handler();
 
 CY_ISR(GPS_receive)
 {    
+    if (NMEA_pointer >= NMEA_MAX_SIZE) NMEA_pointer = 0;
     NMEA_buffer[NMEA_pointer] = UART_GPS_GetByte();
     switch(NMEA_buffer[NMEA_pointer])
     {
         case NMEA_START_DELIMITER:
         NMEA_pointer = 0;
-        //Pin_GPS_RxLED_Write(1);
+        Pin_GPS_RxLED_Write(1);
         break;
         
         case NMEA_END_DELIMITER:
         NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
-        //Pin_GPS_RxLED_Write(0);
+        Pin_GPS_RxLED_Write(0);
         break;
         
         default:
@@ -77,7 +87,10 @@ CY_ISR(GPS_receive)
 
 CY_ISR(GSM_receive)
 {  
+    if (GSM_pointer >= GSM_BUFFER_SIZE) GSM_pointer = 0;
     GSM_buffer[GSM_pointer] = UART_GSM_UartGetChar();
+    GSM_pointer++;
+    
 }
 
 int main(void)
@@ -91,6 +104,7 @@ int main(void)
     isr_GSM_received_StartEx(GSM_receive);
     
     UART_GPS_Start();
+    UART_GSM_Start();
 
     CySysWdtSetInterruptCallback(CY_SYS_WDT_COUNTER2, (cyWdtCallback) wake_up_handler);
     
@@ -114,10 +128,45 @@ int main(void)
         
         // Turn off GPS
         Pin_GPS_power_Write(POWER_OFF);
+        
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LATITUDE, GPS_lat);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LONGITUDE, GPS_lon);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_SPEED, GPS_spd);
+        
 
         
         /*********************** GSM *******************************/
         
+        // Turn on GSM
+        Pin_GSM_PWRKEY_Write(0);
+        CyDelay(GSM_PWRKEY_DELAY_MS);
+        Pin_GSM_PWRKEY_Write(1);
+        
+        UART_GSM_UartPutString("AT");   // Init communication
+        CyDelay(100);
+        UART_GSM_UartPutString("AT+CMGF=1");    // Select text mode for SMS
+        CyDelay(100);
+        GSM_command[0] = 0; //Free GSM command buffer
+        str_append(GSM_command, "AT+CMGS=\"");
+        str_append(GSM_command, GSM_MASTER_PHONE_NUM);
+        str_append(GSM_command, "\"");
+        UART_GSM_UartPutString(GSM_command);
+        CyDelay(100);
+        GSM_command[0] = 0; //Free GSM command buffer
+        str_append(GSM_command, "Lat:");
+        str_append(GSM_command, GPS_lat);
+        str_append(GSM_command, "Lon:");
+        str_append(GSM_command, GPS_lon);
+        str_append(GSM_command, "Spd:");
+        str_append(GSM_command, GPS_spd);
+        UART_GSM_UartPutString(GSM_command);
+        UART_GSM_UartPutChar(CTRL_Z);
+        CyDelay(5000);
+        
+        // Turn off GSM
+        Pin_GSM_PWRKEY_Write(0);
+        CyDelay(GSM_PWRKEY_DELAY_MS);
+        Pin_GSM_PWRKEY_Write(1);
 
         
     }

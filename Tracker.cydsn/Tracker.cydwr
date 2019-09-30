@@ -12,6 +12,7 @@
   <Data key="DataVersionKey" value="2" />
   <Group key="DWRInstGuidMapping">
     <Group key="Clock">
+      <Data key="43ec2fa1-bf22-4b71-9477-b6ca7b97f0b0/2dc2d7a8-ce2b-43c7-af4a-821c8cd73ccf" value="UART_GSM_SCBCLK" />
       <Data key="499a06be-ed17-4a20-adb2-60f3ee412094" value="Clock_2" />
       <Data key="b0162966-0060-4af5-82d1-fcb491ad7619/be0a0e37-ad17-42ca-b5a1-1a654d736358" value="UART_GPS_IntClock" />
     </Group>
@@ -797,6 +798,29 @@
   </Group>
   <Group key="M0S8Clock">
     <Group key="LocalClks">
+      <Group key="43ec2fa1-bf22-4b71-9477-b6ca7b97f0b0/2dc2d7a8-ce2b-43c7-af4a-821c8cd73ccf">
+        <Data key="check_tolerance" value="True" />
+        <Data key="derive_type" value="AUTO" />
+        <Data key="desired_freq" value="115.2" />
+        <Data key="desired_unit" value="3" />
+        <Data key="divider" value="408" />
+        <Data key="enabled" value="True" />
+        <Data key="fract_divider_denominator" value="0" />
+        <Data key="fract_divider_numerator" value="0" />
+        <Data key="minus_tolerance" value="5" />
+        <Data key="name" value="UART_GSM_SCBCLK" />
+        <Data key="netlist_name" value="\UART_GSM:SCBCLK\" />
+        <Data key="ph_align_clock_id" value="413DE2EF-D9F2-4233-A808-DFAF137FD877" />
+        <Data key="ph_align_clock_name" value="HFCLK" />
+        <Data key="plus_tolerance" value="5" />
+        <Data key="scope" value="LOCAL" />
+        <Data key="sourceClk_minus_acuracy_name" value="0.2" />
+        <Data key="sourceClk_plus_acuracy_name" value="0.2" />
+        <Data key="src_clk_id" value="413DE2EF-D9F2-4233-A808-DFAF137FD877" />
+        <Data key="src_clk_name" value="HFClk" />
+        <Data key="start_on_reset" value="True" />
+        <Data key="uses_fract_divider" value="False" />
+      </Group>
       <Group key="499a06be-ed17-4a20-adb2-60f3ee412094">
         <Data key="check_tolerance" value="False" />
         <Data key="derive_type" value="NAMED_DIVIDER" />
@@ -1220,7 +1244,7 @@
         <Data key="sourceClk_plus_acuracy_name" value="0.2" />
         <Data key="src_clk_id" value="" />
         <Data key="src_clk_name" value="" />
-        <Data key="start_on_reset" value="True" />
+        <Data key="start_on_reset" value="False" />
         <Data key="trim_with" value="WCO" />
       </Group>
       <Group key="AE29FF0C-09F4-4f1f-90F6-BE0C5AFEF171">
@@ -1287,7 +1311,7 @@
         <Data key="derive_type" value="BUILTIN" />
         <Data key="desired_freq" value="0" />
         <Data key="desired_unit" value="0" />
-        <Data key="divider" value="65536" />
+        <Data key="divider" value="32768" />
         <Data key="enabled" value="False" />
         <Data key="minus_tolerance" value="0" />
         <Data key="name" value="Timer0 (WDT0)" />
@@ -1295,8 +1319,8 @@
         <Data key="operation_mode" value="2" />
         <Data key="plus_tolerance" value="0" />
         <Data key="scope" value="BUILTIN" />
-        <Data key="sourceClk_minus_acuracy_name" value="60" />
-        <Data key="sourceClk_plus_acuracy_name" value="60" />
+        <Data key="sourceClk_minus_acuracy_name" value="0.015" />
+        <Data key="sourceClk_plus_acuracy_name" value="0.015" />
         <Data key="src_clk_id" value="9A908CA6-5BB3-4db0-B098-959E5D90882B" />
         <Data key="src_clk_name" value="LFClk" />
         <Data key="start_on_reset" value="False" />
