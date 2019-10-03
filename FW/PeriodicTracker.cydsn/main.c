@@ -199,7 +199,7 @@ void ATCommand(char* command, uint32 timeout, char* responce)
 
 void NMEA_GetField(char *packet, uint8 field, char *result)
 {
-    uint8 i, n;
+    uint8 i;
     uint8 count = 0;
     
     // Search field
@@ -214,13 +214,9 @@ void NMEA_GetField(char *packet, uint8 field, char *result)
         if (packet[i + count] == NMEA_FIELD_DELIMITER) break;
         if (packet[i + count] == 0u) break;
     }    
-    
-    // Copy field to result
-    for (n = 0; n < count; n++)
-    {
-        result[n] = packet[i+n];
-    }
-    result[n+1] = 0;    // Add null terminator
+
+    strncpy(result, packet + i, count);
+    result[count] = 0;    // Add null terminator
 }
 
 void NMEA_handle_packet(char *packet, char *NMEA_data)
