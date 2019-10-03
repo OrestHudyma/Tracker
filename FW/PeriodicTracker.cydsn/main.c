@@ -256,7 +256,7 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
                 checksum ^= packet[n];
             }
             itoa(checksum, calculated_checksum, 16);
-            if(str_cmp(calculated_checksum, packet_checksum, 0, 1)) error++;
+            if(!strcmp(calculated_checksum, packet_checksum)) error++;
         }   
         
         // Copy buffer to NMEA packet if no errors found
