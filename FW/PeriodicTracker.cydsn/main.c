@@ -57,11 +57,13 @@ void NMEA_GetField(char *packet, uint8 field, char *result);
 uint8 str_cmp(char *str1, char *str2, uint8 start, uint8 stop);
 void str_append(char *base, char *add);
 
+
 char GPS_lat[NMEA_MAX_SIZE];
 char GPS_lon[NMEA_MAX_SIZE];
 char GPS_spd[NMEA_MAX_SIZE];
 
 void wake_up_handler();
+void ATCommand(char* command, uint32 timeout, char* responce);
 
 CY_ISR(GPS_receive)
 {    
@@ -92,6 +94,8 @@ CY_ISR(GSM_receive)
     GSM_pointer++;
     
 }
+
+    
 
 int main(void)
 {
@@ -175,6 +179,24 @@ void wake_up_handler()
 {
 }
 
+void ATCommand(char* command, uint32 timeout, char* responce)
+{
+    GSM_pointer = 0;
+    UART_GSM_UartPutString(command);
+    while(timeout)
+    {
+        if(GSM_pointer) break;
+        CyDelayUs(1000);
+        timeout--;
+    }
+    if(timeout == 0) responce[0] = 0;
+    else 
+    {
+        CyDelay(100);
+        strncpy(responce, GSM_buffer, GSM_BUFFER_SIZE);
+    }    
+}
+
 void NMEA_GetField(char *packet, uint8 field, char *result)
 {
     uint8 i, n;
@@ -206,7 +228,7 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
     uint8 i, n;
     uint8 error = 0;
     uint8 checksum = 0;
-    char packet_checksum[3];
+    char *packet_checksum;
     char calculated_checksum[3];
         
     // Check if appropriate packet is handled
@@ -215,27 +237,22 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
         // Check for receive errors
         for(i = 0; i < NMEA_MAX_SIZE; i++)
         {
-            if ((packet[i] < 32) & (packet[i] != 0x0D) & (packet[i] != 0x0A)) 
+            if ((packet[i] < 32) & (packet[i] != 0x0D) & (packet[i] != NMEA_END_DELIMITER)) 
             {
                 error++;
                 break;
             }
-            if (packet[i] != 0x0A) break;
+            if (packet[i] != NMEA_END_DELIMITER) break;
         }
         
         // Validate checksum and cut packet if no receive errors
         if (!error)
         {
             // Find checksum field
-            for(i = 0; i < NMEA_MAX_SIZE; i++)
-            {
-                if (packet[i] == NMEA_CHECKSUM_DELIMITER) break;
-            }
-            packet[i] = 0;
-            
-            packet_checksum[0] = packet[i+1];
-            packet_checksum[1] = packet[i+2];
-            packet_checksum[2] = 0;
+            packet_checksum = memchr(packet, NMEA_CHECKSUM_DELIMITER, NMEA_MAX_SIZE) + 1;
+            i = (uint8)(packet_checksum - packet);
+            // Cut string to NMEA_CHECKSUM_DELIMITER
+            packet[i-1] = 0;
             
             // Calculate checksum and compare
             for (n = 0; n < i; n++)
@@ -249,10 +266,7 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
         // Copy buffer to NMEA packet if no errors found
         if (!error)
         {
-            for(i = 0; i < NMEA_MAX_SIZE; i++)
-            {
-                NMEA_data[i] = packet[i];
-            }
+            strlcpy(NMEA_data, packet, NMEA_MAX_SIZE);
         }
     }
 }
