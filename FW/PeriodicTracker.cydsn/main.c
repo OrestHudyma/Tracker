@@ -25,6 +25,7 @@
 #define NMEA_END_DELIMITER        0x0A
 #define NMEA_CHECKSUM_DELIMITER   '*'
 #define NMEA_FIELD_DELIMITER      ','
+#define NMEA_MSG_NAME_SIZE        4
 
 #define NMEA_GPRMC_LATITUDE         3
 #define NMEA_GPRMC_LONGITUDE        5
@@ -53,10 +54,6 @@ uint8 GSM_pointer = 0;
 
 void NMEA_handle_packet();
 void NMEA_GetField(char *packet, uint8 field, char *result);
-
-uint8 str_cmp(char *str1, char *str2, uint8 start, uint8 stop);
-void str_append(char *base, char *add);
-
 
 char GPS_lat[NMEA_MAX_SIZE];
 char GPS_lon[NMEA_MAX_SIZE];
@@ -94,8 +91,6 @@ CY_ISR(GSM_receive)
     GSM_pointer++;
     
 }
-
-    
 
 int main(void)
 {
@@ -150,18 +145,18 @@ int main(void)
         UART_GSM_UartPutString("AT+CMGF=1");    // Select text mode for SMS
         CyDelay(100);
         GSM_command[0] = 0;     // Free GSM command buffer
-        str_append(GSM_command, "AT+CMGS=\"");
-        str_append(GSM_command, GSM_MASTER_PHONE_NUM);
-        str_append(GSM_command, "\"");
+        strcat(GSM_command, "AT+CMGS=\"");
+        strcat(GSM_command, GSM_MASTER_PHONE_NUM);
+        strcat(GSM_command, "\"");
         UART_GSM_UartPutString(GSM_command);
         CyDelay(100);
         GSM_command[0] = 0;     // Free GSM command buffer
-        str_append(GSM_command, "Lat:");
-        str_append(GSM_command, GPS_lat);
-        str_append(GSM_command, "Lon:");
-        str_append(GSM_command, GPS_lon);
-        str_append(GSM_command, "Spd:");
-        str_append(GSM_command, GPS_spd);
+        strcat(GSM_command, "Lat:");
+        strcat(GSM_command, GPS_lat);
+        strcat(GSM_command, "Lon:");
+        strcat(GSM_command, GPS_lon);
+        strcat(GSM_command, "Spd:");
+        strcat(GSM_command, GPS_spd);
         UART_GSM_UartPutString(GSM_command);
         UART_GSM_UartPutChar(CTRL_Z);
         CyDelay(5000);
@@ -192,7 +187,7 @@ void ATCommand(char* command, uint32 timeout, char* responce)
     if(timeout == 0) responce[0] = 0;
     else 
     {
-        CyDelay(100);
+        CyDelay(200);
         strncpy(responce, GSM_buffer, GSM_BUFFER_SIZE);
     }    
 }
@@ -213,7 +208,7 @@ void NMEA_GetField(char *packet, uint8 field, char *result)
     {
         if (packet[i + count] == NMEA_FIELD_DELIMITER) break;
         if (packet[i + count] == 0u) break;
-    }    
+    }
 
     strncpy(result, packet + i, count);
     result[count] = 0;    // Add null terminator
@@ -228,7 +223,7 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
     char calculated_checksum[3];
         
     // Check if appropriate packet is handled
-    if (!str_cmp(packet, NMEA_data, 0, 4))
+    if (!strncmp(packet, NMEA_data, NMEA_MSG_NAME_SIZE))
     {
         // Check for receive errors
         for(i = 0; i < NMEA_MAX_SIZE; i++)
@@ -265,28 +260,6 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
             strlcpy(NMEA_data, packet, NMEA_MAX_SIZE);
         }
     }
-}
-
-uint8 str_cmp(char *str1, char *str2, uint8 start, uint8 stop)
-{
-    uint8 i;
-    for(i = start; i <= stop; i++)
-    {
-        if (str1[i] != str2[i]) return 1;
-    }
-    return 0;
-}
-
-void str_append(char *base, char *add)
-{
-    uint8 i; 
-    uint8 size = strlen(base);
-    for(i = 0; i <= strlen(add); i++)
-    {
-        base[i + size] = add[i];
-    }
-    i++;
-    base[i + size] = 0;
 }
 
 /* [] END OF FILE */
