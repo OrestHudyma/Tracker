@@ -1019,7 +1019,7 @@
         <Data key="sourceClk_plus_acuracy_name" value="0.015" />
         <Data key="src_clk_id" value="238B4C77-851C-44d4-8040-C396F09E3440" />
         <Data key="src_clk_name" value="WCO" />
-        <Data key="start_on_reset" value="True" />
+        <Data key="start_on_reset" value="False" />
       </Group>
       <Group key="13A80296-70D5-4f89-B0D3-510602484A50">
         <Data key="check_tolerance" value="False" />
@@ -1161,7 +1161,7 @@
         <Data key="desired_freq" value="0" />
         <Data key="desired_unit" value="0" />
         <Data key="divider" value="30" />
-        <Data key="enabled" value="True" />
+        <Data key="enabled" value="False" />
         <Data key="minus_tolerance" value="0" />
         <Data key="name" value="Timer2 (WDT2)" />
         <Data key="netlist_name" value="Timer2 (WDT2)" />
@@ -1341,7 +1341,7 @@
         <Data key="sourceClk_plus_acuracy_name" value="60" />
         <Data key="src_clk_id" value="" />
         <Data key="src_clk_name" value="" />
-        <Data key="start_on_reset" value="True" />
+        <Data key="start_on_reset" value="False" />
       </Group>
       <Group key="E08F1AEE-48D4-466e-B1C4-06141E81C5F4">
         <Data key="check_tolerance" value="False" />

@@ -12,9 +12,6 @@
 #include "project.h"
 #include <stdlib.h>
 
-#define GPS_FIX_TIMEOUT_SEC            10
-#define GPS_FIX_IMPROVE_DELAY_MS       5000
-
 #define POWER_ON        1
 #define POWER_OFF       0
 #define CTRL_Z          26
@@ -41,7 +38,9 @@
 #define GSM_PWRKEY_DELAY_MS        1500
 
 // Default Settings
-#define GSM_MASTER_PHONE_NUM       "+380633584255"
+#define GSM_MASTER_PHONE_NUM           "+380633584255"
+#define GPS_FIX_TIMEOUT_SEC            5
+#define GPS_FIX_IMPROVE_DELAY_MS       5000
 
 
 char NMEA_buffer[NMEA_MAX_SIZE];
@@ -65,7 +64,8 @@ void ATCommand(char* command, uint32 timeout, char* responce);
 CY_ISR(GPS_receive)
 {    
     if (NMEA_pointer >= NMEA_MAX_SIZE) NMEA_pointer = 0;
-    NMEA_buffer[NMEA_pointer] = UART_GPS_GetByte();
+    NMEA_buffer[NMEA_pointer] = UART_GPS_GetChar();
+    NMEA_buffer[NMEA_pointer + 1] = 0;
     switch(NMEA_buffer[NMEA_pointer])
     {
         case NMEA_START_DELIMITER:
@@ -88,8 +88,8 @@ CY_ISR(GSM_receive)
 {  
     if (GSM_pointer >= GSM_BUFFER_SIZE) GSM_pointer = 0;
     GSM_buffer[GSM_pointer] = UART_GSM_UartGetChar();
+    GSM_buffer[GSM_pointer + 1] = 0;
     GSM_pointer++;
-    
 }
 
 int main(void)
@@ -140,25 +140,28 @@ int main(void)
         CyDelay(GSM_PWRKEY_DELAY_MS);
         Pin_GSM_PWRKEY_Write(1);
         
-        UART_GSM_UartPutString("AT");   // Init communication
+        UART_GSM_UartPutString("AT\r");   // Init communication
         CyDelay(100);
-        UART_GSM_UartPutString("AT+CMGF=1");    // Select text mode for SMS
+        UART_GSM_UartPutString("AT+CMGF=1\r");    // Select text mode for SMS
         CyDelay(100);
         GSM_command[0] = 0;     // Free GSM command buffer
-        strcat(GSM_command, "AT+CMGS=\"");
-        strcat(GSM_command, GSM_MASTER_PHONE_NUM);
-        strcat(GSM_command, "\"");
+        strlcat(GSM_command, "AT+CMGS=\"", GSM_BUFFER_SIZE);
+        strlcat(GSM_command, GSM_MASTER_PHONE_NUM, GSM_BUFFER_SIZE);
+        strlcat(GSM_command, "\"", GSM_BUFFER_SIZE);
         UART_GSM_UartPutString(GSM_command);
         CyDelay(100);
         GSM_command[0] = 0;     // Free GSM command buffer
-        strcat(GSM_command, "Lat:");
-        strcat(GSM_command, GPS_lat);
-        strcat(GSM_command, "Lon:");
-        strcat(GSM_command, GPS_lon);
-        strcat(GSM_command, "Spd:");
-        strcat(GSM_command, GPS_spd);
+        strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
+        strlcat(GSM_command, GPS_lat, GSM_BUFFER_SIZE);
+        strlcat(GSM_command, "Lon:", GSM_BUFFER_SIZE);
+        strlcat(GSM_command, GPS_lon, GSM_BUFFER_SIZE);
+        strlcat(GSM_command, "Spd:", GSM_BUFFER_SIZE);
+        strlcat(GSM_command, GPS_spd, GSM_BUFFER_SIZE);
+        strlcat(GSM_command, "Validity:", GSM_BUFFER_SIZE);
+        strlcat(GSM_command, field_tmp, GSM_BUFFER_SIZE);
         UART_GSM_UartPutString(GSM_command);
         UART_GSM_UartPutChar(CTRL_Z);
+        UART_GSM_UartPutString("\r");
         CyDelay(5000);
         
         // Turn off GSM
@@ -174,21 +177,20 @@ void wake_up_handler()
 {
 }
 
-void ATCommand(char* command, uint32 timeout, char* responce)
+void ATCommand(char* command, uint32 timeout, char* response)
 {
     GSM_pointer = 0;
     UART_GSM_UartPutString(command);
-    while(timeout)
+    while((timeout > 0) & (GSM_pointer == 0))
     {
-        if(GSM_pointer) break;
         CyDelayUs(1000);
         timeout--;
     }
-    if(timeout == 0) responce[0] = 0;
+    if(timeout == 0) response[0] = 0;
     else 
     {
         CyDelay(200);
-        strncpy(responce, GSM_buffer, GSM_BUFFER_SIZE);
+        strlcpy(response, GSM_buffer, GSM_BUFFER_SIZE);
     }    
 }
 
@@ -209,9 +211,7 @@ void NMEA_GetField(char *packet, uint8 field, char *result)
         if (packet[i + count] == NMEA_FIELD_DELIMITER) break;
         if (packet[i + count] == 0u) break;
     }
-
-    strncpy(result, packet + i, count);
-    result[count] = 0;    // Add null terminator
+    strlcpy(result, packet + i, count + 1);  // Add 1 to count for null terminator
 }
 
 void NMEA_handle_packet(char *packet, char *NMEA_data)
@@ -246,19 +246,13 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
             packet[i-1] = 0;
             
             // Calculate checksum and compare
-            for (n = 0; n < i; n++)
-            {
-                checksum ^= packet[n];
-            }
+            for (n = 0; n < i; n++) checksum ^= packet[n];
             itoa(checksum, calculated_checksum, 16);
             if(!strcmp(calculated_checksum, packet_checksum)) error++;
         }   
         
         // Copy buffer to NMEA packet if no errors found
-        if (!error)
-        {
-            strlcpy(NMEA_data, packet, NMEA_MAX_SIZE);
-        }
+        if (!error) strlcpy(NMEA_data, packet, NMEA_MAX_SIZE);
     }
 }
 
