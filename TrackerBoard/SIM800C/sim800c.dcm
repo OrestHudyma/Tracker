@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP sim800c
+D Quad-band GSM/GPRS wireless module
+K
+F http://www.sabreadv.com/wp-content/uploads/SIM800C_Hardware_Design_V1.00.pdf
+$ENDCMP
+#
+#End Doc Library
