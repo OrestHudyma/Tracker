@@ -17,8 +17,16 @@
       <Data key="b0162966-0060-4af5-82d1-fcb491ad7619/be0a0e37-ad17-42ca-b5a1-1a654d736358" value="UART_GPS_IntClock" />
     </Group>
     <Group key="Pin">
+      <Data key="0fb3a5db-cb69-446c-accc-f30cbd882739" value="Pin_GSM_PWRKEY" />
+      <Data key="8d00a49c-9848-491e-bc05-62079b1b9eb2" value="Pin_GSM_NETLIGHT" />
+      <Data key="43ec2fa1-bf22-4b71-9477-b6ca7b97f0b0/23b8206d-1c77-4e61-be4a-b4037d5de5fc" value="UART_GSM_tx" />
+      <Data key="43ec2fa1-bf22-4b71-9477-b6ca7b97f0b0/78e33e5d-45ea-4b75-88d5-73274e8a7ce4" value="UART_GSM_rx" />
+      <Data key="45383f85-17fc-4207-8490-befb6e3a6975" value="Pin_GSM_STATUS" />
+      <Data key="1425177d-0d0e-4468-8bcc-e638e5509a9b" value="Rx_GPS" />
       <Data key="9558733f-9e0b-4f40-8e6d-9b74b2aa1ad3" value="PinSYSCLK" />
-      <Data key="e851a3b9-efb8-48be-bbb8-b303b216c393" value="Pin_1" />
+      <Data key="b1fb67ca-40b3-45c1-ab78-a206c7f56208" value="Pin_GPS_RxLED" />
+      <Data key="e851a3b9-efb8-48be-bbb8-b303b216c393" value="Pin_GPS_power" />
+      <Data key="ed092b9b-d398-4703-be89-cebf998501f6" value="Tx_GPS" />
     </Group>
   </Group>
   <Group key="FlashSecurity">
@@ -1418,6 +1426,11 @@
     </Group>
   </Group>
   <Group key="Pin2">
+    <Group key="0fb3a5db-cb69-446c-accc-f30cbd882739">
+      <Group key="0">
+        <Data key="Port Format" value="2,7" />
+      </Group>
+    </Group>
     <Group key="9558733f-9e0b-4f40-8e6d-9b74b2aa1ad3">
       <Group key="0">
         <Data key="Port Format" value="3,0" />

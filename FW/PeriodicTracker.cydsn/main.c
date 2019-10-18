@@ -12,9 +12,11 @@
 #include "project.h"
 #include <stdlib.h>
 
-#define POWER_ON        1
-#define POWER_OFF       0
-#define CTRL_Z          26
+#define POWER_ON            1
+#define POWER_OFF           0
+#define CTRL_Z              26
+#define SEC_DELAY_MS        1000
+#define MS_DELAY_US         1000
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -35,15 +37,22 @@
 
 // GSM definitions
 #define GSM_BUFFER_SIZE            100
-#define GSM_PWRKEY_DELAY_MS        1500
-#define AT_OK                      "\r\nOK\r\n"
+#define GSM_PWRKEY_DELAY_MS        1200             // 1 sec as per SIM900D DS
+#define GSM_POWERUP_DELAY_MS       5000             // 2.2 sec as per SIM900D DS
+#define AT_OK                      "OK"
 #define AT_ERROR                   "\r\nERROR\r\n"
-#define AT_TIMEOUT_MS              10000
+#define AT_TIMEOUT_MS              2000
+#define AT_INTERCOMM_DELAY_MS      500
 
 // Default Settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
-#define GPS_FIX_TIMEOUT_SEC            5
-#define GPS_FIX_IMPROVE_DELAY_MS       5000
+#define GSM_NET_TIMEOUT_SEC            100
+#define GPS_FIX_TIMEOUT_SEC            1
+#define GPS_FIX_IMPROVE_DELAY_MS       1000
+
+#if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
+    #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
+#endif
 
 
 char NMEA_buffer[NMEA_MAX_SIZE];
@@ -64,6 +73,7 @@ char GPS_spd[NMEA_MAX_SIZE];
 void wake_up_handler();
 cystatus ATCommand(char* command, uint32 timeout, char* responce);
 cystatus SendSMS(char* SMS_text);
+cystatus GSM_Init();
 
 CY_ISR(GPS_receive)
 {    
@@ -89,19 +99,18 @@ CY_ISR(GPS_receive)
 }
 
 CY_ISR(GSM_receive)
-{  
+{      
     if (GSM_pointer >= GSM_BUFFER_SIZE) GSM_pointer = 0;
     GSM_buffer[GSM_pointer] = UART_GSM_UartGetChar();
     GSM_buffer[GSM_pointer + 1] = 0;
     GSM_pointer++;
+    UART_GSM_ClearRxInterruptSource(UART_GSM_INTR_RX_NOT_EMPTY);    
 }
 
 int main(void)
 {
     uint16 t;
     char field_tmp[NMEA_MAX_SIZE];
-    char command[NMEA_MAX_SIZE];
-    char GSM_responce[GSM_BUFFER_SIZE];
         
     CyGlobalIntEnable; /* Enable global interrupts. */
     
@@ -122,12 +131,12 @@ int main(void)
         Pin_GPS_power_Write(POWER_ON);
         
 
-        ATCommand(command, 1000, field_tmp);
-        
+        //ATCommand(command, 1000, field_tmp);
+                
         // Wait for GPS fix
         for(t = 0; t < GPS_FIX_TIMEOUT_SEC; t++)
         {
-            CyDelay(1000);
+            CyDelay(SEC_DELAY_MS);
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, field_tmp);
             if (field_tmp[0] == NMEA_GPRMC_VALID) break;            
         }
@@ -144,29 +153,27 @@ int main(void)
         
         /*********************** GSM *******************************/
         
-        // Turn on GSM
-        Pin_GSM_PWRKEY_Write(0);
-        CyDelay(GSM_PWRKEY_DELAY_MS);
-        Pin_GSM_PWRKEY_Write(1);
-        
-        ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce);   // Init communication
+        if (GSM_Init() == CYRET_SUCCESS)
+        {
 
-        strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
-        strlcat(GSM_command, GPS_lat, GSM_BUFFER_SIZE);
-        strlcat(GSM_command, "Lon:", GSM_BUFFER_SIZE);
-        strlcat(GSM_command, GPS_lon, GSM_BUFFER_SIZE);
-        strlcat(GSM_command, "Spd:", GSM_BUFFER_SIZE);
-        strlcat(GSM_command, GPS_spd, GSM_BUFFER_SIZE);
-        strlcat(GSM_command, "Validity:", GSM_BUFFER_SIZE);
-        strlcat(GSM_command, field_tmp, GSM_BUFFER_SIZE);
-        
-        SendSMS(GSM_command);
+            GSM_command[0] = 0;
+            strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, GPS_lat, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, "Lon:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, GPS_lon, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, "Spd:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, GPS_spd, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, "Validity:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, field_tmp, GSM_BUFFER_SIZE);            
+            SendSMS(GSM_command);
+        }
         
         // Turn off GSM
         Pin_GSM_PWRKEY_Write(0);
         CyDelay(GSM_PWRKEY_DELAY_MS);
         Pin_GSM_PWRKEY_Write(1);
-
+        
+        CyDelay(100000);
         
     }
 }
@@ -175,23 +182,89 @@ void wake_up_handler()
 {
 }
 
-cystatus ATCommand(char* command, uint32 timeout, char* response)
+cystatus GSM_Init()
 {
+    uint8 error = 0;
+    uint32 timeout = GSM_NET_TIMEOUT_SEC;
+    char GSM_responce[GSM_BUFFER_SIZE];
+    
+    // Turn on GSM
+    Pin_GSM_PWRKEY_Write(0);
+    CyDelay(GSM_PWRKEY_DELAY_MS);
+    Pin_GSM_PWRKEY_Write(1);
+    CyDelay(GSM_POWERUP_DELAY_MS);
+        
+    ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce);   // Set comm speed
+    error += ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce);   // Check comm 
+    
+    if(error == CYRET_SUCCESS)
+    {
+        // Check if SIM card PIN is disabled
+        error += ATCommand("AT+CPIN?\r", AT_TIMEOUT_MS, GSM_responce);
+        if(strstr(GSM_responce, "+CPIN: READY\r\n\r\nOK") == NULL) error++;
+    }
+    
+    if(error == CYRET_SUCCESS)
+    {
+        // Check if SIM card PIN is disabled
+        error += ATCommand("AT+CSDT?\r", AT_TIMEOUT_MS, GSM_responce);
+        if(strstr(GSM_responce, "+CSDT: 0\r\n\r\nOK") == NULL) error++;
+    }
+    
+    if(error == CYRET_SUCCESS)
+    {
+        // Check if registered in home network
+        GSM_responce[0] =0;
+        while((timeout > 0) & (strstr(GSM_responce, "1\r\n\r\nOK") == NULL))
+        {
+            error += ATCommand("AT+CREG?\r", AT_TIMEOUT_MS, GSM_responce);
+            if(error != CYRET_SUCCESS) break;
+            timeout--;
+            CyDelay(SEC_DELAY_MS - AT_INTERCOMM_DELAY_MS);
+        }
+        if ((error == CYRET_SUCCESS) & (timeout == 0)) return CYRET_TIMEOUT;
+    }
+    
+    if(error == CYRET_SUCCESS)
+    {
+        // Check if module is ready
+        error += ATCommand("AT+CPAS\r", AT_TIMEOUT_MS, GSM_responce);
+        if(strstr(GSM_responce, "+CPAS: 0\r\n\r\nOK") == NULL) error++;
+    }
+    
+    // Check operators for debug
+    error += ATCommand("AT+COPS?\r", AT_TIMEOUT_MS, GSM_responce);
+    
+    // Configure GSM module
+    if(error == CYRET_SUCCESS)
+    {        
+        // Turn on SMS text mode
+        error += ATCommand("AT+CMGF=1\r", AT_TIMEOUT_MS, GSM_responce);
+    }
+    
+    if(error == CYRET_SUCCESS) return CYRET_SUCCESS;
+    else return CYRET_UNKNOWN;
+}
+
+cystatus ATCommand(char* command, uint32 timeout, char* response)
+{   
     GSM_pointer = 0;
     GSM_buffer[GSM_pointer] = 0;
-    UART_GSM_UartPutString(command);
+    response[0] = 0;
+    UART_GSM_UartPutString(command);    
+    CyDelay(AT_INTERCOMM_DELAY_MS);
     while((timeout > 0) & (strstr(GSM_buffer, AT_OK) == NULL))
     {
         if (strstr(GSM_buffer, AT_ERROR) != NULL) return CYRET_UNKNOWN;
-        CyDelayUs(1000);
+        CyDelayUs(MS_DELAY_US);
         timeout--;
-    }    
+    }
     if(timeout == 0) return CYRET_TIMEOUT;
     else 
     {
         strlcpy(response, GSM_buffer, GSM_BUFFER_SIZE);
         return CYRET_SUCCESS;
-    }  
+    }
 }
 
 cystatus SendSMS(char* SMS_text)
@@ -202,13 +275,12 @@ cystatus SendSMS(char* SMS_text)
     
     strlcat(command, "AT+CMGS=\"", GSM_BUFFER_SIZE);
     strlcat(command, GSM_MASTER_PHONE_NUM, GSM_BUFFER_SIZE);
-    strlcat(command, "\"", GSM_BUFFER_SIZE);
-    error += ATCommand(command, AT_TIMEOUT_MS, responce);
+    strlcat(command, "\"\r", GSM_BUFFER_SIZE);
+    ATCommand(command, 0, responce);
     command[0] = 0;     // Free GSM command buffer
     strlcat(command, SMS_text, GSM_BUFFER_SIZE);
-    error += ATCommand(command, AT_TIMEOUT_MS, responce);
+    ATCommand(command, 0, responce);
     UART_GSM_UartPutChar(CTRL_Z);
-    UART_GSM_UartPutString("\r");
     if(error == 0) return CYRET_SUCCESS;
     else return CYRET_UNKNOWN;
 }
