@@ -14,7 +14,7 @@
 
 #define POWER_ON            1
 #define POWER_OFF           0
-#define CTRL_Z              26
+#define ASCII_SUB           26      // ASCII SUBSTITUTE symbol (CTRL + Z)
 #define SEC_DELAY_MS        1000
 #define MS_DELAY_US         1000
 
@@ -47,7 +47,7 @@
 // Default Settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
 #define GSM_NET_TIMEOUT_SEC            100
-#define GPS_FIX_TIMEOUT_SEC            1
+#define GPS_FIX_TIMEOUT_SEC            100000
 #define GPS_FIX_IMPROVE_DELAY_MS       1000
 
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
@@ -84,12 +84,12 @@ CY_ISR(GPS_receive)
     {
         case NMEA_START_DELIMITER:
         NMEA_pointer = 0;
-        Pin_GPS_RxLED_Write(1);
+        //Pin_GPS_RxLED_Write(1);
         break;
         
         case NMEA_END_DELIMITER:
         NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
-        Pin_GPS_RxLED_Write(0);
+        //Pin_GPS_RxLED_Write(0);
         break;
         
         default:
@@ -109,7 +109,7 @@ CY_ISR(GSM_receive)
 
 int main(void)
 {
-    uint16 t;
+    uint32 t;
     char field_tmp[NMEA_MAX_SIZE];
         
     CyGlobalIntEnable; /* Enable global interrupts. */
@@ -138,10 +138,10 @@ int main(void)
         {
             CyDelay(SEC_DELAY_MS);
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, field_tmp);
-            if (field_tmp[0] == NMEA_GPRMC_VALID) break;            
+            if (field_tmp[0] == NMEA_GPRMC_VALID) {Pin_GPS_RxLED_Write(1); break;}
         }
         CyDelay(GPS_FIX_IMPROVE_DELAY_MS);
-        
+                
         // Turn off GPS
         Pin_GPS_power_Write(POWER_OFF);
         
@@ -155,7 +155,6 @@ int main(void)
         
         if (GSM_Init() == CYRET_SUCCESS)
         {
-
             GSM_command[0] = 0;
             strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
             strlcat(GSM_command, GPS_lat, GSM_BUFFER_SIZE);
@@ -173,8 +172,7 @@ int main(void)
         CyDelay(GSM_PWRKEY_DELAY_MS);
         Pin_GSM_PWRKEY_Write(1);
         
-        CyDelay(100000);
-        
+        CyDelay(100000);        
     }
 }
 
@@ -232,7 +230,7 @@ cystatus GSM_Init()
         if(strstr(GSM_responce, "+CPAS: 0\r\n\r\nOK") == NULL) error++;
     }
     
-    // Check operators for debug
+    // Check operator for debug
     error += ATCommand("AT+COPS?\r", AT_TIMEOUT_MS, GSM_responce);
     
     // Configure GSM module
@@ -276,11 +274,11 @@ cystatus SendSMS(char* SMS_text)
     strlcat(command, "AT+CMGS=\"", GSM_BUFFER_SIZE);
     strlcat(command, GSM_MASTER_PHONE_NUM, GSM_BUFFER_SIZE);
     strlcat(command, "\"\r", GSM_BUFFER_SIZE);
-    ATCommand(command, 0, responce);
+    error += ATCommand(command, 0, responce);
     command[0] = 0;     // Free GSM command buffer
     strlcat(command, SMS_text, GSM_BUFFER_SIZE);
-    ATCommand(command, 0, responce);
-    UART_GSM_UartPutChar(CTRL_Z);
+    error += ATCommand(command, 0, responce);
+    UART_GSM_UartPutChar(ASCII_SUB);
     if(error == 0) return CYRET_SUCCESS;
     else return CYRET_UNKNOWN;
 }
