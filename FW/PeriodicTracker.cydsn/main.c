@@ -12,8 +12,8 @@
 #include "project.h"
 #include <stdlib.h>
 
-#define POWER_ON            1
-#define POWER_OFF           0
+#define POWER_ON            0
+#define POWER_OFF           1
 #define ASCII_SUB           26      // ASCII SUBSTITUTE symbol (CTRL + Z)
 #define SEC_DELAY_MS        1000
 #define MS_DELAY_US         1000
@@ -47,8 +47,8 @@
 // Default Settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
 #define GSM_NET_TIMEOUT_SEC            100
-#define GPS_FIX_TIMEOUT_SEC            100000
-#define GPS_FIX_IMPROVE_DELAY_MS       1000
+#define GPS_FIX_TIMEOUT_SEC            500
+#define GPS_FIX_IMPROVE_DELAY_MS       10000
 
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
@@ -56,7 +56,7 @@
 
 
 char NMEA_buffer[NMEA_MAX_SIZE];
-char NMEA_GPRMC[NMEA_MAX_SIZE] = "GPRMC";
+char NMEA_GPRMC[NMEA_MAX_SIZE] = "GNRMC";
 uint8 NMEA_pointer;
 
 char GSM_buffer[GSM_BUFFER_SIZE];
@@ -84,12 +84,12 @@ CY_ISR(GPS_receive)
     {
         case NMEA_START_DELIMITER:
         NMEA_pointer = 0;
-        //Pin_GPS_RxLED_Write(1);
+        Pin_GPS_RxLED_Write(1);
         break;
         
         case NMEA_END_DELIMITER:
         NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
-        //Pin_GPS_RxLED_Write(0);
+        Pin_GPS_RxLED_Write(0);
         break;
         
         default:
@@ -128,17 +128,14 @@ int main(void)
         /*********************** GPS *******************************/
         
         // Apply power to GPS
-        Pin_GPS_power_Write(POWER_ON);
-        
-
-        //ATCommand(command, 1000, field_tmp);
+        Pin_GPS_power_Write(POWER_ON);  
                 
         // Wait for GPS fix
         for(t = 0; t < GPS_FIX_TIMEOUT_SEC; t++)
         {
             CyDelay(SEC_DELAY_MS);
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, field_tmp);
-            if (field_tmp[0] == NMEA_GPRMC_VALID) {Pin_GPS_RxLED_Write(1); break;}
+            if (field_tmp[0] == NMEA_GPRMC_VALID) {break;}
         }
         CyDelay(GPS_FIX_IMPROVE_DELAY_MS);
                 
@@ -155,6 +152,9 @@ int main(void)
         
         if (GSM_Init() == CYRET_SUCCESS)
         {
+            ATCommand("AT+CUSD=1,\"*111#\"\r", 0, field_tmp); // debug
+            CyDelay(5000);
+            
             GSM_command[0] = 0;
             strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
             strlcat(GSM_command, GPS_lat, GSM_BUFFER_SIZE);
@@ -166,7 +166,9 @@ int main(void)
             strlcat(GSM_command, field_tmp, GSM_BUFFER_SIZE);            
             SendSMS(GSM_command);
         }
-        
+        CyDelay(GSM_PWRKEY_DELAY_MS);
+        CyDelay(GSM_PWRKEY_DELAY_MS);
+        CyDelay(GSM_PWRKEY_DELAY_MS);
         // Turn off GSM
         Pin_GSM_PWRKEY_Write(0);
         CyDelay(GSM_PWRKEY_DELAY_MS);
