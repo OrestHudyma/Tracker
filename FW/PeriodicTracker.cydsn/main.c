@@ -11,6 +11,8 @@
 */
 #include "project.h"
 #include <stdlib.h>
+#include <stdio.h>
+#include <math.h> 
 
 #define POWER_ON            0
 #define POWER_OFF           1
@@ -27,7 +29,9 @@
 #define NMEA_MSG_NAME_SIZE        4
 
 #define NMEA_GPRMC_LATITUDE         3
+#define NMEA_GPRMC_EHS              4
 #define NMEA_GPRMC_LONGITUDE        5
+#define NMEA_GPRMC_MHS              6
 #define NMEA_GPRMC_UTC              1
 #define NMEA_GPRMC_SPEED            7
 #define NMEA_GPRMC_VALIDITY         2
@@ -39,7 +43,7 @@
 #define GSM_BUFFER_SIZE            100
 #define GSM_PWRKEY_DELAY_MS        1200             // 1 sec as per SIM900D DS
 #define GSM_POWERUP_DELAY_MS       5000             // 2.2 sec as per SIM900D DS
-#define AT_OK                      "OK"
+#define AT_OK                      "\r\nOK\r\n"
 #define AT_ERROR                   "\r\nERROR\r\n"
 #define AT_TIMEOUT_MS              2000
 #define AT_INTERCOMM_DELAY_MS      500
@@ -54,6 +58,14 @@
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
 #endif
 
+struct location_data
+{
+    char GPS_lat[NMEA_MAX_SIZE];
+    char GPS_lon[NMEA_MAX_SIZE];
+    char GPS_spd[NMEA_MAX_SIZE];
+    char GPS_EHS[NMEA_MAX_SIZE];                   // Equator hemisphere
+    char GPS_MHS[NMEA_MAX_SIZE];                   // Prime meridian hemisphere
+};
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GNRMC";
@@ -65,10 +77,10 @@ uint8 GSM_pointer = 0;
 
 void NMEA_handle_packet();
 void NMEA_GetField(char *packet, uint8 field, char *result);
+void NMEA_native_to_formatted(struct location_data *native, struct location_data *formatted);
 
-char GPS_lat[NMEA_MAX_SIZE];
-char GPS_lon[NMEA_MAX_SIZE];
-char GPS_spd[NMEA_MAX_SIZE];
+struct location_data loc_native;
+struct location_data loc_formatted;
 
 void wake_up_handler();
 cystatus ATCommand(char* command, uint32 timeout, char* responce);
@@ -113,7 +125,7 @@ int main(void)
     char field_tmp[NMEA_MAX_SIZE];
         
     CyGlobalIntEnable; /* Enable global interrupts. */
-    
+        
     isr_GPS_received_StartEx(GPS_receive);
     isr_GSM_received_StartEx(GSM_receive);
     
@@ -142,39 +154,57 @@ int main(void)
         // Turn off GPS
         Pin_GPS_power_Write(POWER_OFF);
         
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LATITUDE, GPS_lat);
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LONGITUDE, GPS_lon);
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_SPEED, GPS_spd);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LATITUDE, loc_native.GPS_lat);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LONGITUDE, loc_native.GPS_lon);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_EHS, loc_native.GPS_EHS);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_MHS, loc_native.GPS_MHS);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_SPEED, loc_native.GPS_spd);
         
-
+        //strcat(loc_native.GPS_lat, "4948.5211");
+        //strcat(loc_native.GPS_lon, "02402.5147");
+        
+        
+        NMEA_native_to_formatted(&loc_native, &loc_formatted);
         
         /*********************** GSM *******************************/
         
         if (GSM_Init() == CYRET_SUCCESS)
         {
             ATCommand("AT+CUSD=1,\"*111#\"\r", 0, field_tmp); // debug
-            CyDelay(5000);
-            
+            CyDelay(10000);
+
             GSM_command[0] = 0;
             strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
-            strlcat(GSM_command, GPS_lat, GSM_BUFFER_SIZE);
-            strlcat(GSM_command, "Lon:", GSM_BUFFER_SIZE);
-            strlcat(GSM_command, GPS_lon, GSM_BUFFER_SIZE);
-            strlcat(GSM_command, "Spd:", GSM_BUFFER_SIZE);
-            strlcat(GSM_command, GPS_spd, GSM_BUFFER_SIZE);
-            strlcat(GSM_command, "Validity:", GSM_BUFFER_SIZE);
-            strlcat(GSM_command, field_tmp, GSM_BUFFER_SIZE);            
+            strlcat(GSM_command, loc_native.GPS_lat, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, ".", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_native.GPS_EHS, GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rLon:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_native.GPS_lon, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, ".", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_native.GPS_MHS, GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rSpd:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_native.GPS_spd, GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rValidity:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, field_tmp, GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rhttp://maps.google.com/?q=", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_formatted.GPS_lat, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, ",", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_formatted.GPS_lon, GSM_BUFFER_SIZE);
+            
             SendSMS(GSM_command);
         }
-        CyDelay(GSM_PWRKEY_DELAY_MS);
-        CyDelay(GSM_PWRKEY_DELAY_MS);
-        CyDelay(GSM_PWRKEY_DELAY_MS);
+        CyDelay(10000);
         // Turn off GSM
         Pin_GSM_PWRKEY_Write(0);
         CyDelay(GSM_PWRKEY_DELAY_MS);
         Pin_GSM_PWRKEY_Write(1);
         
-        CyDelay(100000);        
+        CyDelay(1000000); 
+        CySysPmDeepSleep();
     }
 }
 
@@ -280,7 +310,10 @@ cystatus SendSMS(char* SMS_text)
     command[0] = 0;     // Free GSM command buffer
     strlcat(command, SMS_text, GSM_BUFFER_SIZE);
     error += ATCommand(command, 0, responce);
-    UART_GSM_UartPutChar(ASCII_SUB);
+    command[0] = ASCII_SUB;
+    //command[0] = 27;
+    command[1] = 0;
+    error += ATCommand(command, 0, responce);
     if(error == 0) return CYRET_SUCCESS;
     else return CYRET_UNKNOWN;
 }
@@ -345,6 +378,30 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
         // Copy buffer to NMEA packet if no errors found
         if (!error) strlcpy(NMEA_data, packet, NMEA_MAX_SIZE);
     }
+}
+
+void NMEA_native_to_formatted(struct location_data *native, struct location_data *formatted)
+{        
+    double lat;
+    double lon;
+    
+    uint32 intDeg;
+    uint32 tmp;
+    
+    lat = atof(native->GPS_lat);
+    lon = atof(native->GPS_lon);
+    
+    intDeg = trunc(lat/100);
+    lat = intDeg + (lat - 100 * intDeg)/60;
+    intDeg = trunc(lat);
+    tmp = (lat - intDeg) * 1000000;
+    sprintf(formatted->GPS_lat, "%ld.%ld", intDeg, tmp);
+        
+    intDeg = trunc(lon/100);
+    lon = intDeg + (lon - 100 * intDeg)/60;
+    intDeg = trunc(lon);
+    tmp = (lon - intDeg) * 1000000;
+    sprintf(formatted->GPS_lon, "%ld.%ld", intDeg, tmp);
 }
 
 /* [] END OF FILE */
