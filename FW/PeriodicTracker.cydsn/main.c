@@ -14,11 +14,14 @@
 #include <stdio.h>
 #include <math.h> 
 
+asm (".global _printf_float");  // Enable using float with printf
+
 #define POWER_ON            0
 #define POWER_OFF           1
 #define ASCII_SUB           26      // ASCII SUBSTITUTE symbol (CTRL + Z)
 #define SEC_DELAY_MS        1000
 #define MS_DELAY_US         1000
+#define kn_to_km_ratio      1.852   // Knots to kilometers ratio
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -66,6 +69,7 @@ struct location_data
     char GPS_EHS[NMEA_MAX_SIZE];                   // Equator hemisphere
     char GPS_MHS[NMEA_MAX_SIZE];                   // Prime meridian hemisphere
 };
+char GPS_validity[1];
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GNRMC";
@@ -122,7 +126,6 @@ CY_ISR(GSM_receive)
 int main(void)
 {
     uint32 t;
-    char field_tmp[NMEA_MAX_SIZE];
         
     CyGlobalIntEnable; /* Enable global interrupts. */
         
@@ -146,34 +149,36 @@ int main(void)
         for(t = 0; t < GPS_FIX_TIMEOUT_SEC; t++)
         {
             CyDelay(SEC_DELAY_MS);
-            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, field_tmp);
-            if (field_tmp[0] == NMEA_GPRMC_VALID) {break;}
+            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, GPS_validity);
+            if (GPS_validity[0] == NMEA_GPRMC_VALID) {break;}
         }
         CyDelay(GPS_FIX_IMPROVE_DELAY_MS);
                 
         // Turn off GPS
         Pin_GPS_power_Write(POWER_OFF);
         
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LATITUDE, loc_native.GPS_lat);
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LONGITUDE, loc_native.GPS_lon);
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_EHS, loc_native.GPS_EHS);
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_MHS, loc_native.GPS_MHS);
-        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_SPEED, loc_native.GPS_spd);
-        
-        //strcat(loc_native.GPS_lat, "4948.5211");
-        //strcat(loc_native.GPS_lon, "02402.5147");
-        
-        
-        NMEA_native_to_formatted(&loc_native, &loc_formatted);
+        NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, GPS_validity);
+        if (GPS_validity[0] == NMEA_GPRMC_VALID)
+        {
+            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LATITUDE, loc_native.GPS_lat);
+            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LONGITUDE, loc_native.GPS_lon);
+            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_EHS, loc_native.GPS_EHS);
+            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_MHS, loc_native.GPS_MHS);
+            NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_SPEED, loc_native.GPS_spd); 
+               
+            NMEA_native_to_formatted(&loc_native, &loc_formatted);
+        }
         
         /*********************** GSM *******************************/
         
         if (GSM_Init() == CYRET_SUCCESS)
         {
-            ATCommand("AT+CUSD=1,\"*111#\"\r", 0, field_tmp); // debug
-            CyDelay(10000);
-
             GSM_command[0] = 0;
+            if (GPS_validity[0] == NMEA_GPRMC_INVALID)
+            {
+                strlcat(GSM_command, "No GPS data. Using last valid.\r", GSM_BUFFER_SIZE);
+            }
+            
             strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
             strlcat(GSM_command, loc_native.GPS_lat, GSM_BUFFER_SIZE);
             strlcat(GSM_command, ".", GSM_BUFFER_SIZE);
@@ -185,10 +190,10 @@ int main(void)
             strlcat(GSM_command, loc_native.GPS_MHS, GSM_BUFFER_SIZE);
             
             strlcat(GSM_command, "\rSpd:", GSM_BUFFER_SIZE);
-            strlcat(GSM_command, loc_native.GPS_spd, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_formatted.GPS_spd, GSM_BUFFER_SIZE);
             
             strlcat(GSM_command, "\rValidity:", GSM_BUFFER_SIZE);
-            strlcat(GSM_command, field_tmp, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, GPS_validity, GSM_BUFFER_SIZE);
             
             strlcat(GSM_command, "\rhttp://maps.google.com/?q=", GSM_BUFFER_SIZE);
             strlcat(GSM_command, loc_formatted.GPS_lat, GSM_BUFFER_SIZE);
@@ -382,26 +387,27 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
 
 void NMEA_native_to_formatted(struct location_data *native, struct location_data *formatted)
 {        
-    double lat;
-    double lon;
+    float lat;
+    float lon;
+    float spd;
     
-    uint32 intDeg;
-    uint32 tmp;
+    uint16 intDeg;
     
     lat = atof(native->GPS_lat);
     lon = atof(native->GPS_lon);
+    spd = atof(native->GPS_spd);
     
     intDeg = trunc(lat/100);
     lat = intDeg + (lat - 100 * intDeg)/60;
-    intDeg = trunc(lat);
-    tmp = (lat - intDeg) * 1000000;
-    sprintf(formatted->GPS_lat, "%ld.%ld", intDeg, tmp);
-        
+    
     intDeg = trunc(lon/100);
     lon = intDeg + (lon - 100 * intDeg)/60;
-    intDeg = trunc(lon);
-    tmp = (lon - intDeg) * 1000000;
-    sprintf(formatted->GPS_lon, "%ld.%ld", intDeg, tmp);
+    
+    spd *= kn_to_km_ratio;
+    
+    sprintf(formatted->GPS_lat, "%f", lat);
+    sprintf(formatted->GPS_lon, "%f", lon);
+    sprintf(formatted->GPS_spd, "%.1f", spd);
 }
 
 /* [] END OF FILE */
