@@ -21,7 +21,8 @@ asm (".global _printf_float");  // Enable using float with printf
 #define ASCII_SUB           26      // ASCII SUBSTITUTE symbol (CTRL + Z)
 #define SEC_DELAY_MS        1000
 #define MS_DELAY_US         1000
-#define kn_to_km_ratio      1.852   // Knots to kilometers ratio
+#define MIN_TO_SEC_RATIO    60
+#define KN_TO_KM_RATIO      1.852   // Knots to kilometers ratio
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -53,9 +54,10 @@ asm (".global _printf_float");  // Enable using float with printf
 
 // Default Settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
+#define GSM_ATTEMPTS                   5
 #define GSM_NET_TIMEOUT_SEC            100
 #define GPS_FIX_TIMEOUT_SEC            500
-#define GPS_FIX_IMPROVE_DELAY_MS       10000
+#define GPS_FIX_IMPROVE_DELAY_MS       20000
 
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
@@ -83,8 +85,8 @@ void NMEA_handle_packet();
 void NMEA_GetField(char *packet, uint8 field, char *result);
 void NMEA_native_to_formatted(struct location_data *native, struct location_data *formatted);
 
-struct location_data loc_native;
-struct location_data loc_formatted;
+struct location_data loc_native = {"","","","",""};
+struct location_data loc_formatted = {"","","","",""};
 
 void wake_up_handler();
 cystatus ATCommand(char* command, uint32 timeout, char* responce);
@@ -95,17 +97,17 @@ CY_ISR(GPS_receive)
 {    
     if (NMEA_pointer >= NMEA_MAX_SIZE) NMEA_pointer = 0;
     NMEA_buffer[NMEA_pointer] = UART_GPS_GetChar();
-    NMEA_buffer[NMEA_pointer + 1] = 0;
+    NMEA_buffer[NMEA_pointer + 1] = 0;    
     switch(NMEA_buffer[NMEA_pointer])
     {
         case NMEA_START_DELIMITER:
         NMEA_pointer = 0;
-        Pin_GPS_RxLED_Write(1);
+        Pin_LED_status_Write(1);
         break;
         
         case NMEA_END_DELIMITER:
         NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
-        Pin_GPS_RxLED_Write(0);
+        Pin_LED_status_Write(0);
         break;
         
         default:
@@ -126,7 +128,7 @@ CY_ISR(GSM_receive)
 int main(void)
 {
     uint32 t;
-        
+            
     CyGlobalIntEnable; /* Enable global interrupts. */
         
     isr_GPS_received_StartEx(GPS_receive);
@@ -150,9 +152,12 @@ int main(void)
         {
             CyDelay(SEC_DELAY_MS);
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, GPS_validity);
-            if (GPS_validity[0] == NMEA_GPRMC_VALID) {break;}
+            if (GPS_validity[0] == NMEA_GPRMC_VALID) 
+            {                
+                CyDelay(GPS_FIX_IMPROVE_DELAY_MS);
+                break;
+            }
         }
-        CyDelay(GPS_FIX_IMPROVE_DELAY_MS);
                 
         // Turn off GPS
         Pin_GPS_power_Write(POWER_OFF);
@@ -168,6 +173,8 @@ int main(void)
                
             NMEA_native_to_formatted(&loc_native, &loc_formatted);
         }
+        CyDelay(SEC_DELAY_MS);
+        Pin_LED_status_Write(0);
         
         /*********************** GSM *******************************/
         
@@ -207,9 +214,12 @@ int main(void)
         Pin_GSM_PWRKEY_Write(0);
         CyDelay(GSM_PWRKEY_DELAY_MS);
         Pin_GSM_PWRKEY_Write(1);
-        
-        CyDelay(1000000); 
+                
+        UART_GPS_Sleep();
+        UART_GSM_Sleep();
         CySysPmDeepSleep();
+        UART_GPS_Wakeup();
+        UART_GSM_Wakeup();
     }
 }
 
@@ -235,14 +245,14 @@ cystatus GSM_Init()
     if(error == CYRET_SUCCESS)
     {
         // Check if SIM card PIN is disabled
-        error += ATCommand("AT+CPIN?\r", AT_TIMEOUT_MS, GSM_responce);
+        error = ATCommand("AT+CPIN?\r", AT_TIMEOUT_MS, GSM_responce);
         if(strstr(GSM_responce, "+CPIN: READY\r\n\r\nOK") == NULL) error++;
     }
     
     if(error == CYRET_SUCCESS)
     {
         // Check if SIM card PIN is disabled
-        error += ATCommand("AT+CSDT?\r", AT_TIMEOUT_MS, GSM_responce);
+        error = ATCommand("AT+CSDT?\r", AT_TIMEOUT_MS, GSM_responce);
         if(strstr(GSM_responce, "+CSDT: 0\r\n\r\nOK") == NULL) error++;
     }
     
@@ -263,7 +273,7 @@ cystatus GSM_Init()
     if(error == CYRET_SUCCESS)
     {
         // Check if module is ready
-        error += ATCommand("AT+CPAS\r", AT_TIMEOUT_MS, GSM_responce);
+        error = ATCommand("AT+CPAS\r", AT_TIMEOUT_MS, GSM_responce);
         if(strstr(GSM_responce, "+CPAS: 0\r\n\r\nOK") == NULL) error++;
     }
     
@@ -274,7 +284,7 @@ cystatus GSM_Init()
     if(error == CYRET_SUCCESS)
     {        
         // Turn on SMS text mode
-        error += ATCommand("AT+CMGF=1\r", AT_TIMEOUT_MS, GSM_responce);
+        error = ATCommand("AT+CMGF=1\r", AT_TIMEOUT_MS, GSM_responce);
     }
     
     if(error == CYRET_SUCCESS) return CYRET_SUCCESS;
@@ -300,6 +310,34 @@ cystatus ATCommand(char* command, uint32 timeout, char* response)
         strlcpy(response, GSM_buffer, GSM_BUFFER_SIZE);
         return CYRET_SUCCESS;
     }
+}
+
+cystatus GPS_Power(uint8 toggle)
+{    
+    uint8 attempts = GSM_ATTEMPTS;
+    char GSM_responce[GSM_BUFFER_SIZE];
+    
+    // Turn on GSM
+    Pin_GSM_PWRKEY_Write(0);
+    CyDelay(GSM_PWRKEY_DELAY_MS);
+    Pin_GSM_PWRKEY_Write(1);
+    CyDelay(GSM_POWERUP_DELAY_MS);
+    
+    do
+    {
+        if(!attempts) break;
+        attempts--;
+        
+        // Turn on GSM
+        Pin_GSM_PWRKEY_Write(0);
+        CyDelay(GSM_PWRKEY_DELAY_MS);
+        Pin_GSM_PWRKEY_Write(1);
+        CyDelay(GSM_POWERUP_DELAY_MS);
+        ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce);   // Set comm speed
+    }
+    while((ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce) != CYRET_SUCCESS) & !toggle);
+    if(attempts) return CYRET_SUCCESS;
+    else return CYRET_TIMEOUT;
 }
 
 cystatus SendSMS(char* SMS_text)
@@ -398,12 +436,12 @@ void NMEA_native_to_formatted(struct location_data *native, struct location_data
     spd = atof(native->GPS_spd);
     
     intDeg = trunc(lat/100);
-    lat = intDeg + (lat - 100 * intDeg)/60;
+    lat = intDeg + (lat - 100 * intDeg)/MIN_TO_SEC_RATIO;
     
     intDeg = trunc(lon/100);
-    lon = intDeg + (lon - 100 * intDeg)/60;
+    lon = intDeg + (lon - 100 * intDeg)/MIN_TO_SEC_RATIO;
     
-    spd *= kn_to_km_ratio;
+    spd *= KN_TO_KM_RATIO;
     
     sprintf(formatted->GPS_lat, "%f", lat);
     sprintf(formatted->GPS_lon, "%f", lon);

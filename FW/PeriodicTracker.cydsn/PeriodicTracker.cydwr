@@ -24,7 +24,8 @@
       <Data key="45383f85-17fc-4207-8490-befb6e3a6975" value="Pin_GSM_STATUS" />
       <Data key="1425177d-0d0e-4468-8bcc-e638e5509a9b" value="Rx_GPS" />
       <Data key="9558733f-9e0b-4f40-8e6d-9b74b2aa1ad3" value="PinSYSCLK" />
-      <Data key="b1fb67ca-40b3-45c1-ab78-a206c7f56208" value="Pin_GPS_RxLED" />
+      <Data key="77715107-f8d5-47e5-a629-0fb83101ac6b" value="Pin_VBat" />
+      <Data key="b1fb67ca-40b3-45c1-ab78-a206c7f56208" value="Pin_LED_status" />
       <Data key="e851a3b9-efb8-48be-bbb8-b303b216c393" value="Pin_GPS_power" />
       <Data key="ed092b9b-d398-4703-be89-cebf998501f6" value="Tx_GPS" />
     </Group>
@@ -1168,8 +1169,8 @@
         <Data key="derive_type" value="BUILTIN" />
         <Data key="desired_freq" value="0" />
         <Data key="desired_unit" value="0" />
-        <Data key="divider" value="28" />
-        <Data key="enabled" value="False" />
+        <Data key="divider" value="25" />
+        <Data key="enabled" value="True" />
         <Data key="minus_tolerance" value="0" />
         <Data key="name" value="Timer2 (WDT2)" />
         <Data key="netlist_name" value="Timer2 (WDT2)" />
@@ -1252,7 +1253,7 @@
         <Data key="sourceClk_plus_acuracy_name" value="0.2" />
         <Data key="src_clk_id" value="" />
         <Data key="src_clk_name" value="" />
-        <Data key="start_on_reset" value="True" />
+        <Data key="start_on_reset" value="False" />
         <Data key="trim_with" value="WCO" />
       </Group>
       <Group key="AE29FF0C-09F4-4f1f-90F6-BE0C5AFEF171">
@@ -1403,7 +1404,7 @@
         <Data key="sourceClk_plus_acuracy_name" value="0.2" />
         <Data key="src_clk_id" value="5A84F528-323D-4eda-8141-58D504D70A4B" />
         <Data key="src_clk_name" value="SysClk" />
-        <Data key="start_on_reset" value="True" />
+        <Data key="start_on_reset" value="False" />
       </Group>
       <Group key="F19A89AE-D2B5-4d11-9670-CE5139C8F272">
         <Data key="check_tolerance" value="False" />
@@ -1451,16 +1452,22 @@
         <Data key="Port Format" value="3,0" />
       </Group>
     </Group>
+    <Group key="77715107-f8d5-47e5-a629-0fb83101ac6b">
+      <Group key="0">
+        <Data key="Port Format" value="2,0" />
+      </Group>
+    </Group>
     <Group key="b1fb67ca-40b3-45c1-ab78-a206c7f56208">
       <Group key="0">
-        <Data key="Port Format" value="0,7" />
+        <Data key="Port Format" value="5,0" />
       </Group>
     </Group>
     <Group key="e851a3b9-efb8-48be-bbb8-b303b216c393">
       <Group key="0">
-        <Data key="Port Format" value="0,3" />
+        <Data key="Port Format" value="0,7" />
       </Group>
     </Group>
+    <Group key="UnAssigned Pins" />
   </Group>
   <Group key="PlaceDir">
     <Data key="count" value="0" />
