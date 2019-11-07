@@ -1,6 +1,6 @@
 /* ========================================
  *
- * Copyright YOUR COMPANY, THE YEAR
+ * Copyright Lion Security, THE YEAR
  * All Rights Reserved
  * UNPUBLISHED, LICENSED SOFTWARE.
  *
@@ -39,24 +39,28 @@ asm (".global _printf_float");  // Enable using float with printf
 #define NMEA_GPRMC_UTC              1
 #define NMEA_GPRMC_SPEED            7
 #define NMEA_GPRMC_VALIDITY         2
+#define NMEA_GPGGA_SATELLITES       7
+#define NMEA_GPGGA_HDOP             8
+#define NMEA_GPGGA_ALTITUDE         9
 
 #define NMEA_GPRMC_VALID            'A'
 #define NMEA_GPRMC_INVALID          'V'
 
 // GSM definitions
-#define GSM_BUFFER_SIZE            100
+#define GSM_BUFFER_SIZE            180
 #define GSM_PWRKEY_DELAY_MS        1200             // 1 sec as per SIM900D DS
 #define GSM_POWERUP_DELAY_MS       5000             // 2.2 sec as per SIM900D DS
 #define AT_OK                      "\r\nOK\r\n"
 #define AT_ERROR                   "\r\nERROR\r\n"
 #define AT_TIMEOUT_MS              2000
 #define AT_INTERCOMM_DELAY_MS      500
+#define GSM_SIM800_SMS_BUF_SIZE    100
 
 // Default Settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
 #define GSM_ATTEMPTS                   5
-#define GSM_NET_TIMEOUT_SEC            100
-#define GPS_FIX_TIMEOUT_SEC            500
+#define GSM_NET_TIMEOUT_SEC            500
+#define GPS_FIX_TIMEOUT_SEC            1000
 #define GPS_FIX_IMPROVE_DELAY_MS       20000
 
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
@@ -70,28 +74,34 @@ struct location_data
     char GPS_spd[NMEA_MAX_SIZE];
     char GPS_EHS[NMEA_MAX_SIZE];                   // Equator hemisphere
     char GPS_MHS[NMEA_MAX_SIZE];                   // Prime meridian hemisphere
+    char GPS_HDOP[NMEA_MAX_SIZE];                  // Horizontal dilution of precision
+    char GPS_Alt[NMEA_MAX_SIZE];                   // Altitude, Meters, above mean sea level
 };
 char GPS_validity[1];
+char GPS_satellites_count[1];
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GNRMC";
+char NMEA_GPGGA[NMEA_MAX_SIZE] = "GNGGA";
 uint8 NMEA_pointer;
 
 char GSM_buffer[GSM_BUFFER_SIZE];
 char GSM_command[GSM_BUFFER_SIZE];
+char GSM_responce[GSM_BUFFER_SIZE];
 uint8 GSM_pointer = 0;
 
 void NMEA_handle_packet();
 void NMEA_GetField(char *packet, uint8 field, char *result);
 void NMEA_native_to_formatted(struct location_data *native, struct location_data *formatted);
 
-struct location_data loc_native = {"","","","",""};
-struct location_data loc_formatted = {"","","","",""};
+struct location_data loc_native = {"","","","","","",""};
+struct location_data loc_formatted = {"","","","","","",""};
 
 void wake_up_handler();
 cystatus ATCommand(char* command, uint32 timeout, char* responce);
 cystatus SendSMS(char* SMS_text);
 cystatus GSM_Init();
+cystatus GSM_Power(uint8 toggle);
 
 CY_ISR(GPS_receive)
 {    
@@ -107,6 +117,7 @@ CY_ISR(GPS_receive)
         
         case NMEA_END_DELIMITER:
         NMEA_handle_packet(&NMEA_buffer, &NMEA_GPRMC);
+        NMEA_handle_packet(&NMEA_buffer, &NMEA_GPGGA);
         Pin_LED_status_Write(0);
         break;
         
@@ -128,6 +139,9 @@ CY_ISR(GSM_receive)
 int main(void)
 {
     uint32 t;
+    char* pointer;
+    uint8 size;
+    char tmp[10];
             
     CyGlobalIntEnable; /* Enable global interrupts. */
         
@@ -163,6 +177,8 @@ int main(void)
         Pin_GPS_power_Write(POWER_OFF);
         
         NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, GPS_validity);
+        NMEA_GetField(NMEA_GPGGA, NMEA_GPGGA_SATELLITES, GPS_satellites_count);
+        
         if (GPS_validity[0] == NMEA_GPRMC_VALID)
         {
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_LATITUDE, loc_native.GPS_lat);
@@ -170,6 +186,8 @@ int main(void)
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_EHS, loc_native.GPS_EHS);
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_MHS, loc_native.GPS_MHS);
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_SPEED, loc_native.GPS_spd); 
+            NMEA_GetField(NMEA_GPGGA, NMEA_GPGGA_ALTITUDE, loc_native.GPS_Alt);
+            NMEA_GetField(NMEA_GPGGA, NMEA_GPGGA_HDOP, loc_native.GPS_HDOP);
                
             NMEA_native_to_formatted(&loc_native, &loc_formatted);
         }
@@ -199,8 +217,26 @@ int main(void)
             strlcat(GSM_command, "\rSpd:", GSM_BUFFER_SIZE);
             strlcat(GSM_command, loc_formatted.GPS_spd, GSM_BUFFER_SIZE);
             
-            strlcat(GSM_command, "\rValidity:", GSM_BUFFER_SIZE);
-            strlcat(GSM_command, GPS_validity, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, "\rAlt:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_native.GPS_Alt, GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rSat:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, GPS_satellites_count, GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rHDOP:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, loc_native.GPS_HDOP, GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rFTS:", GSM_BUFFER_SIZE);
+            itoa(t, tmp, 10);
+            strlcat(GSM_command, tmp, GSM_BUFFER_SIZE);
+            strlcat(GSM_command, "s", GSM_BUFFER_SIZE);
+            
+            strlcat(GSM_command, "\rBatt", GSM_BUFFER_SIZE);
+            ATCommand("AT+CBC\r", AT_TIMEOUT_MS, GSM_responce);            
+            pointer = strstr(GSM_responce, ": ");
+            size = strstr(pointer, "\r") - pointer +1;            
+            strlcat(GSM_command, pointer, strlen(GSM_command) + size);
+            strlcat(GSM_command, "mV", GSM_BUFFER_SIZE);
             
             strlcat(GSM_command, "\rhttp://maps.google.com/?q=", GSM_BUFFER_SIZE);
             strlcat(GSM_command, loc_formatted.GPS_lat, GSM_BUFFER_SIZE);
@@ -211,9 +247,7 @@ int main(void)
         }
         CyDelay(10000);
         // Turn off GSM
-        Pin_GSM_PWRKEY_Write(0);
-        CyDelay(GSM_PWRKEY_DELAY_MS);
-        Pin_GSM_PWRKEY_Write(1);
+        GSM_Power(0);
                 
         UART_GPS_Sleep();
         UART_GSM_Sleep();
@@ -233,14 +267,7 @@ cystatus GSM_Init()
     uint32 timeout = GSM_NET_TIMEOUT_SEC;
     char GSM_responce[GSM_BUFFER_SIZE];
     
-    // Turn on GSM
-    Pin_GSM_PWRKEY_Write(0);
-    CyDelay(GSM_PWRKEY_DELAY_MS);
-    Pin_GSM_PWRKEY_Write(1);
-    CyDelay(GSM_POWERUP_DELAY_MS);
-        
-    ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce);   // Set comm speed
-    error += ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce);   // Check comm 
+    GSM_Power(1);
     
     if(error == CYRET_SUCCESS)
     {
@@ -312,17 +339,10 @@ cystatus ATCommand(char* command, uint32 timeout, char* response)
     }
 }
 
-cystatus GPS_Power(uint8 toggle)
+cystatus GSM_Power(uint8 toggle)
 {    
     uint8 attempts = GSM_ATTEMPTS;
     char GSM_responce[GSM_BUFFER_SIZE];
-    
-    // Turn on GSM
-    Pin_GSM_PWRKEY_Write(0);
-    CyDelay(GSM_PWRKEY_DELAY_MS);
-    Pin_GSM_PWRKEY_Write(1);
-    CyDelay(GSM_POWERUP_DELAY_MS);
-    
     do
     {
         if(!attempts) break;
@@ -335,7 +355,7 @@ cystatus GPS_Power(uint8 toggle)
         CyDelay(GSM_POWERUP_DELAY_MS);
         ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce);   // Set comm speed
     }
-    while((ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce) != CYRET_SUCCESS) & !toggle);
+    while((ATCommand("AT\r", AT_TIMEOUT_MS, GSM_responce) != CYRET_SUCCESS) ^ !toggle);
     if(attempts) return CYRET_SUCCESS;
     else return CYRET_TIMEOUT;
 }
@@ -352,7 +372,7 @@ cystatus SendSMS(char* SMS_text)
     error += ATCommand(command, 0, responce);
     command[0] = 0;     // Free GSM command buffer
     strlcat(command, SMS_text, GSM_BUFFER_SIZE);
-    error += ATCommand(command, 0, responce);
+    error += ATCommand(command, 0, responce);    
     command[0] = ASCII_SUB;
     //command[0] = 27;
     command[1] = 0;
