@@ -191,6 +191,7 @@ int main(void)
                
             NMEA_native_to_formatted(&loc_native, &loc_formatted);
         }
+            
         CyDelay(SEC_DELAY_MS);
         Pin_LED_status_Write(0);
         
@@ -445,10 +446,9 @@ void NMEA_handle_packet(char *packet, char *NMEA_data)
 
 void NMEA_native_to_formatted(struct location_data *native, struct location_data *formatted)
 {        
-    float lat;
-    float lon;
-    float spd;
-    
+    double lat;
+    double lon;
+    float spd;    
     uint16 intDeg;
     
     lat = atof(native->GPS_lat);
@@ -463,9 +463,9 @@ void NMEA_native_to_formatted(struct location_data *native, struct location_data
     
     spd *= KN_TO_KM_RATIO;
     
-    sprintf(formatted->GPS_lat, "%f", lat);
-    sprintf(formatted->GPS_lon, "%f", lon);
-    sprintf(formatted->GPS_spd, "%.1f", spd);
+    sprintf(formatted->GPS_lat, "%.8lf", lat);
+    sprintf(formatted->GPS_lon, "%.8lf", lon);
+    sprintf(formatted->GPS_spd, "%.1lf", spd);
 }
 
 /* [] END OF FILE */
