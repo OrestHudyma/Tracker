@@ -1,11 +1,11 @@
 /* ========================================
  *
- * Copyright Lion Security, THE YEAR
+ * Copyright Lion Security, 2020
  * All Rights Reserved
  * UNPUBLISHED, LICENSED SOFTWARE.
  *
  * CONFIDENTIAL AND PROPRIETARY INFORMATION
- * WHICH IS THE PROPERTY OF your company.
+ * WHICH IS THE PROPERTY OF Lion Security.
  *
  * ========================================
 */
@@ -23,6 +23,7 @@ asm (".global _printf_float");  // Enable using float with printf
 #define MS_DELAY_US         1000
 #define MIN_TO_SEC_RATIO    60
 #define KN_TO_KM_RATIO      1.852   // Knots to kilometers ratio
+#define WCO_FREQ            32768   // Hz
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -63,6 +64,10 @@ asm (".global _printf_float");  // Enable using float with printf
 #define GPS_FIX_TIMEOUT_SEC            1000
 #define GPS_FIX_IMPROVE_DELAY_MS       20000
 
+// System Settings
+#define OVERALL_TIMEOUT     150     // seconds
+#define POWER_STAB_DELAY    2000    // miliseconds
+
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
 #endif
@@ -79,6 +84,7 @@ struct location_data
 };
 char GPS_validity[1];
 char GPS_satellites_count[1];
+char event_log[GSM_BUFFER_SIZE] = "";
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GNRMC";
@@ -133,7 +139,7 @@ CY_ISR(GSM_receive)
     GSM_buffer[GSM_pointer] = UART_GSM_UartGetChar();
     GSM_buffer[GSM_pointer + 1] = 0;
     GSM_pointer++;
-    UART_GSM_ClearRxInterruptSource(UART_GSM_INTR_RX_NOT_EMPTY);    
+    UART_GSM_ClearRxInterruptSource(UART_GSM_INTR_RX_NOT_EMPTY);
 }
 
 int main(void)
@@ -142,7 +148,17 @@ int main(void)
     char* pointer;
     uint8 size;
     char tmp[10];
-            
+    
+    CyDelay(POWER_STAB_DELAY);
+    for(t = 0; t < 20; t++)
+    {
+        Pin_LED_status_Write(1);
+        CyDelay(100);
+        Pin_LED_status_Write(0);
+        CyDelay(100);
+    }    
+    strlcat(event_log, "Reset detected\r", GSM_BUFFER_SIZE);
+                
     CyGlobalIntEnable; /* Enable global interrupts. */
         
     isr_GPS_received_StartEx(GPS_receive);
@@ -150,8 +166,6 @@ int main(void)
     
     UART_GPS_Start();
     UART_GSM_Start();
-
-    CySysWdtSetInterruptCallback(CY_SYS_WDT_COUNTER2, (cyWdtCallback) wake_up_handler);
     
     for(;;)
     {
@@ -174,7 +188,9 @@ int main(void)
         }
                 
         // Turn off GPS
-        Pin_GPS_power_Write(POWER_OFF);
+        Pin_GPS_power_Write(POWER_OFF);                    
+        CyDelay(SEC_DELAY_MS);
+        Pin_LED_status_Write(0);
         
         NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, GPS_validity);
         NMEA_GetField(NMEA_GPGGA, NMEA_GPGGA_SATELLITES, GPS_satellites_count);
@@ -191,9 +207,7 @@ int main(void)
                
             NMEA_native_to_formatted(&loc_native, &loc_formatted);
         }
-            
-        CyDelay(SEC_DELAY_MS);
-        Pin_LED_status_Write(0);
+
         
         /*********************** GSM *******************************/
         
@@ -204,6 +218,8 @@ int main(void)
             {
                 strlcat(GSM_command, "No GPS data. Using last valid.\r", GSM_BUFFER_SIZE);
             }
+            strlcat(GSM_command, event_log, GSM_BUFFER_SIZE);
+            event_log[0] = 0; // Clear event log
             
             strlcat(GSM_command, "Lat:", GSM_BUFFER_SIZE);
             strlcat(GSM_command, loc_native.GPS_lat, GSM_BUFFER_SIZE);
@@ -227,7 +243,7 @@ int main(void)
             strlcat(GSM_command, "\rHDOP:", GSM_BUFFER_SIZE);
             strlcat(GSM_command, loc_native.GPS_HDOP, GSM_BUFFER_SIZE);
             
-            strlcat(GSM_command, "\rFTS:", GSM_BUFFER_SIZE);
+            strlcat(GSM_command, "\rTTF:", GSM_BUFFER_SIZE);
             itoa(t, tmp, 10);
             strlcat(GSM_command, tmp, GSM_BUFFER_SIZE);
             strlcat(GSM_command, "s", GSM_BUFFER_SIZE);
@@ -249,10 +265,12 @@ int main(void)
         CyDelay(10000);
         // Turn off GSM
         GSM_Power(0);
-                
+                        
         UART_GPS_Sleep();
         UART_GSM_Sleep();
+        
         CySysPmDeepSleep();
+        
         UART_GPS_Wakeup();
         UART_GSM_Wakeup();
     }
