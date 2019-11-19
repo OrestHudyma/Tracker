@@ -16,14 +16,15 @@
 
 asm (".global _printf_float");  // Enable using float with printf
 
-#define POWER_ON            0
-#define POWER_OFF           1
-#define ASCII_SUB           26      // ASCII SUBSTITUTE symbol (CTRL + Z)
-#define SEC_DELAY_MS        1000
-#define MS_DELAY_US         1000
-#define MIN_TO_SEC_RATIO    60
-#define KN_TO_KM_RATIO      1.852   // Knots to kilometers ratio
-#define WCO_FREQ            32768   // Hz
+#define POWER_ON                0
+#define POWER_OFF               1
+#define ASCII_SUB               26      // ASCII SUBSTITUTE symbol (CTRL + Z)
+#define SEC_DELAY_MS            1000
+#define MS_DELAY_US             1000
+#define MIN_TO_SEC_RATIO        60
+#define KN_TO_KM_RATIO          1.852   // Knots to kilometers ratio
+#define WCO_FREQ                32768   // Hz
+#define PHONE_NUM_MAX_LENGHT    15
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -55,16 +56,15 @@ asm (".global _printf_float");  // Enable using float with printf
 #define AT_ERROR                   "\r\nERROR\r\n"
 #define AT_TIMEOUT_MS              2000
 #define AT_INTERCOMM_DELAY_MS      500
-#define GSM_SIM800_SMS_BUF_SIZE    100
 
-// Default Settings
+// Default user settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
 #define GSM_ATTEMPTS                   5
 #define GSM_NET_TIMEOUT_SEC            500
 #define GPS_FIX_TIMEOUT_SEC            1000
-#define GPS_FIX_IMPROVE_DELAY_MS       20000
+#define GPS_FIX_IMPROVE_DELAY_MS       4000000
 
-// System Settings
+// System settings
 #define OVERALL_TIMEOUT     150     // seconds
 #define POWER_STAB_DELAY    2000    // miliseconds
 
@@ -72,8 +72,15 @@ asm (".global _printf_float");  // Enable using float with printf
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
 #endif
 
-struct location_data
-{
+struct settings {
+    char GSM_master_phone_num[PHONE_NUM_MAX_LENGHT];
+    uint8 GSM_attempts;
+    uint16 GSM_net_timeout_sec;
+    uint16 GPS_fix_timeout_sec;
+    uint32 GPS_fix_improve_delay_ms;
+} user_settings;
+
+struct location_data {
     char GPS_lat[NMEA_MAX_SIZE];
     char GPS_lon[NMEA_MAX_SIZE];
     char GPS_spd[NMEA_MAX_SIZE];
@@ -156,10 +163,22 @@ int main(void)
         CyDelay(100);
         Pin_LED_status_Write(0);
         CyDelay(100);
-    }    
-    strlcat(event_log, "Reset detected\r", GSM_BUFFER_SIZE);
-                
+    }
+    
     CyGlobalIntEnable; /* Enable global interrupts. */
+    
+    strlcat(event_log, "Reset detected\r", GSM_BUFFER_SIZE);
+    
+    // Load default user settings
+    user_settings.GSM_master_phone_num[0] = 0;
+    strlcat(user_settings.GSM_master_phone_num, GSM_MASTER_PHONE_NUM, PHONE_NUM_MAX_LENGHT);
+    user_settings.GSM_attempts = GSM_ATTEMPTS;
+    user_settings.GSM_net_timeout_sec = GSM_NET_TIMEOUT_SEC;
+    user_settings.GPS_fix_timeout_sec = GPS_FIX_TIMEOUT_SEC;
+    user_settings.GPS_fix_improve_delay_ms = GPS_FIX_IMPROVE_DELAY_MS;
+    
+    
+    
         
     isr_GPS_received_StartEx(GPS_receive);
     isr_GSM_received_StartEx(GSM_receive);
