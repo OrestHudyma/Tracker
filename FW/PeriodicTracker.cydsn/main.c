@@ -80,6 +80,16 @@ struct settings {
     uint32 GPS_fix_improve_delay_ms;
 } user_settings;
 
+/* EEPROM storage in work flash, this is defined in Em_EEPROM.c*/
+#if defined (__ICCARM__)
+#pragma data_alignment = CY_FLASH_SIZEOF_ROW
+const uint8_t Em_EEPROM_US_Storage[Em_EEPROM_US_PHYSICAL_SIZE] = {0u};
+const uint8_t Em_EEPROM_US_Empty[Em_EEPROM_US_PHYSICAL_SIZE] = {0u};
+#else
+const uint8_t Em_EEPROM_US_Storage[Em_EEPROM_US_PHYSICAL_SIZE] __ALIGNED(CY_FLASH_SIZEOF_ROW) = {0u};
+const uint8_t Em_EEPROM_US_Empty[Em_EEPROM_US_PHYSICAL_SIZE] __ALIGNED(CY_FLASH_SIZEOF_ROW) = {0u};
+#endif /* defined (__ICCARM__) */
+
 struct location_data {
     char GPS_lat[NMEA_MAX_SIZE];
     char GPS_lon[NMEA_MAX_SIZE];
@@ -92,6 +102,7 @@ struct location_data {
 char GPS_validity[1];
 char GPS_satellites_count[1];
 char event_log[GSM_BUFFER_SIZE] = "";
+uint8 hard_reset_detected;
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GNRMC";
@@ -167,18 +178,35 @@ int main(void)
     
     CyGlobalIntEnable; /* Enable global interrupts. */
     
-    strlcat(event_log, "Reset detected\r", GSM_BUFFER_SIZE);
+    if(!memcmp(Em_EEPROM_US_Storage, Em_EEPROM_US_Empty, Em_EEPROM_US_PHYSICAL_SIZE))
+    {
+        strlcat(event_log, "Hard reset detected\r", GSM_BUFFER_SIZE);
+        hard_reset_detected = 1;
+    }
+    else
+    {
+        strlcat(event_log, "Reset detected\r", GSM_BUFFER_SIZE);
+        hard_reset_detected = 0;
+    }
     
-    // Load default user settings
-    user_settings.GSM_master_phone_num[0] = 0;
-    strlcat(user_settings.GSM_master_phone_num, GSM_MASTER_PHONE_NUM, PHONE_NUM_MAX_LENGHT);
-    user_settings.GSM_attempts = GSM_ATTEMPTS;
-    user_settings.GSM_net_timeout_sec = GSM_NET_TIMEOUT_SEC;
-    user_settings.GPS_fix_timeout_sec = GPS_FIX_TIMEOUT_SEC;
-    user_settings.GPS_fix_improve_delay_ms = GPS_FIX_IMPROVE_DELAY_MS;
-    
-    
-    
+    Em_EEPROM_US_Init((uint32_t)Em_EEPROM_US_Storage);    
+    if(hard_reset_detected)
+    {
+        // Load default user settings
+        user_settings.GSM_master_phone_num[0] = 0;
+        strlcat(user_settings.GSM_master_phone_num, GSM_MASTER_PHONE_NUM, PHONE_NUM_MAX_LENGHT);
+        user_settings.GSM_attempts = GSM_ATTEMPTS;
+        user_settings.GSM_net_timeout_sec = GSM_NET_TIMEOUT_SEC;
+        user_settings.GPS_fix_timeout_sec = GPS_FIX_TIMEOUT_SEC;
+        user_settings.GPS_fix_improve_delay_ms = GPS_FIX_IMPROVE_DELAY_MS;
+        
+        Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+    }
+    else
+    {
+        // Load user settings from flash
+        Em_EEPROM_US_Read(0, &user_settings, sizeof(user_settings));
+    }
         
     isr_GPS_received_StartEx(GPS_receive);
     isr_GSM_received_StartEx(GSM_receive);
@@ -195,13 +223,13 @@ int main(void)
         Pin_GPS_power_Write(POWER_ON);  
                 
         // Wait for GPS fix
-        for(t = 0; t < GPS_FIX_TIMEOUT_SEC; t++)
+        for(t = 0; t < user_settings.GPS_fix_timeout_sec; t++)
         {
             CyDelay(SEC_DELAY_MS);
             NMEA_GetField(NMEA_GPRMC, NMEA_GPRMC_VALIDITY, GPS_validity);
             if (GPS_validity[0] == NMEA_GPRMC_VALID) 
             {                
-                CyDelay(GPS_FIX_IMPROVE_DELAY_MS);
+                CyDelay(user_settings.GPS_fix_improve_delay_ms);
                 break;
             }
         }
@@ -302,7 +330,7 @@ void wake_up_handler()
 cystatus GSM_Init()
 {
     uint8 error = 0;
-    uint32 timeout = GSM_NET_TIMEOUT_SEC;
+    uint32 timeout = user_settings.GSM_net_timeout_sec;
     char GSM_responce[GSM_BUFFER_SIZE];
     
     GSM_Power(1);
@@ -379,7 +407,7 @@ cystatus ATCommand(char* command, uint32 timeout, char* response)
 
 cystatus GSM_Power(uint8 toggle)
 {    
-    uint8 attempts = GSM_ATTEMPTS;
+    uint8 attempts = user_settings.GSM_attempts;
     char GSM_responce[GSM_BUFFER_SIZE];
     do
     {
@@ -405,7 +433,7 @@ cystatus SendSMS(char* SMS_text)
     uint8 error = 0;
     
     strlcat(command, "AT+CMGS=\"", GSM_BUFFER_SIZE);
-    strlcat(command, GSM_MASTER_PHONE_NUM, GSM_BUFFER_SIZE);
+    strlcat(command, user_settings.GSM_master_phone_num, GSM_BUFFER_SIZE);
     strlcat(command, "\"\r", GSM_BUFFER_SIZE);
     error += ATCommand(command, 0, responce);
     command[0] = 0;     // Free GSM command buffer
