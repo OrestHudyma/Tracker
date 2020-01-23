@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h> 
+#include <stdbool.h>
 
 asm (".global _printf_float");  // Enable using float with printf
 
@@ -25,6 +26,7 @@ asm (".global _printf_float");  // Enable using float with printf
 #define KN_TO_KM_RATIO          1.852   // Knots to kilometers ratio
 #define WCO_FREQ                32768   // Hz
 #define PHONE_NUM_MAX_LENGHT    15
+#define PASSWORD_SIZE           5
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -59,14 +61,16 @@ asm (".global _printf_float");  // Enable using float with printf
 
 // Default user settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
+#define PASSWORD                       "0000"
 #define GSM_ATTEMPTS                   5
 #define GSM_NET_TIMEOUT_SEC            500
-#define GPS_FIX_TIMEOUT_SEC            1000
-#define GPS_FIX_IMPROVE_DELAY_MS       4000000
+#define GPS_FIX_TIMEOUT_SEC            500
+#define GPS_FIX_IMPROVE_DELAY_MS       30000
 
 // System settings
 #define OVERALL_TIMEOUT     150     // seconds
 #define POWER_STAB_DELAY    2000    // miliseconds
+#define GSM_WAIT_MS         10000   // miliseconds
 
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
@@ -74,11 +78,13 @@ asm (".global _printf_float");  // Enable using float with printf
 
 struct settings {
     char GSM_master_phone_num[PHONE_NUM_MAX_LENGHT];
+    char password[PASSWORD_SIZE];
     uint8 GSM_attempts;
     uint16 GSM_net_timeout_sec;
     uint16 GPS_fix_timeout_sec;
     uint32 GPS_fix_improve_delay_ms;
 } user_settings;
+const char default_password[PASSWORD_SIZE] = PASSWORD;
 
 /* EEPROM storage in work flash, this is defined in Em_EEPROM.c*/
 #if defined (__ICCARM__)
@@ -99,10 +105,16 @@ struct location_data {
     char GPS_HDOP[NMEA_MAX_SIZE];                  // Horizontal dilution of precision
     char GPS_Alt[NMEA_MAX_SIZE];                   // Altitude, Meters, above mean sea level
 };
+
+struct cmd  {
+    uint8 cmd;
+    uint32 parameter;
+} ext_cmd;
+
 char GPS_validity[1];
 char GPS_satellites_count[1];
 char event_log[GSM_BUFFER_SIZE] = "";
-uint8 hard_reset_detected;
+bool hard_reset_detected;
 
 char NMEA_buffer[NMEA_MAX_SIZE];
 char NMEA_GPRMC[NMEA_MAX_SIZE] = "GNRMC";
@@ -126,6 +138,7 @@ cystatus ATCommand(char* command, uint32 timeout, char* responce);
 cystatus SendSMS(char* SMS_text);
 cystatus GSM_Init();
 cystatus GSM_Power(uint8 toggle);
+cystatus GSM_get_ext_cmd(struct cmd ext_cmd);
 
 CY_ISR(GPS_receive)
 {    
@@ -181,12 +194,12 @@ int main(void)
     if(!memcmp(Em_EEPROM_US_Storage, Em_EEPROM_US_Empty, Em_EEPROM_US_PHYSICAL_SIZE))
     {
         strlcat(event_log, "Hard reset detected\r", GSM_BUFFER_SIZE);
-        hard_reset_detected = 1;
+        hard_reset_detected = true;
     }
     else
     {
         strlcat(event_log, "Reset detected\r", GSM_BUFFER_SIZE);
-        hard_reset_detected = 0;
+        hard_reset_detected = false;
     }
     
     Em_EEPROM_US_Init((uint32_t)Em_EEPROM_US_Storage);    
@@ -195,6 +208,8 @@ int main(void)
         // Load default user settings
         user_settings.GSM_master_phone_num[0] = 0;
         strlcat(user_settings.GSM_master_phone_num, GSM_MASTER_PHONE_NUM, PHONE_NUM_MAX_LENGHT);
+        user_settings.password[0] = 0;
+        strlcat(user_settings.password, PASSWORD, PASSWORD_SIZE);
         user_settings.GSM_attempts = GSM_ATTEMPTS;
         user_settings.GSM_net_timeout_sec = GSM_NET_TIMEOUT_SEC;
         user_settings.GPS_fix_timeout_sec = GPS_FIX_TIMEOUT_SEC;
@@ -215,8 +230,7 @@ int main(void)
     UART_GSM_Start();
     
     for(;;)
-    {
-        
+    {        
         /*********************** GPS *******************************/
         
         // Apply power to GPS
@@ -309,9 +323,15 @@ int main(void)
             
             SendSMS(GSM_command);
         }
-        CyDelay(10000);
+        // Wait for GSM send/receive
+        CyDelay(GSM_WAIT_MS);
+        
+        
+        
+        
+        
         // Turn off GSM
-        GSM_Power(0);
+        GSM_Power(false);
                         
         UART_GPS_Sleep();
         UART_GSM_Sleep();
@@ -333,7 +353,7 @@ cystatus GSM_Init()
     uint32 timeout = user_settings.GSM_net_timeout_sec;
     char GSM_responce[GSM_BUFFER_SIZE];
     
-    GSM_Power(1);
+    GSM_Power(true);
     
     if(error == CYRET_SUCCESS)
     {
