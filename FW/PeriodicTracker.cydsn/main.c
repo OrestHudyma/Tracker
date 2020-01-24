@@ -26,7 +26,7 @@ asm (".global _printf_float");  // Enable using float with printf
 #define KN_TO_KM_RATIO          1.852   // Knots to kilometers ratio
 #define WCO_FREQ                32768   // Hz
 #define PHONE_NUM_MAX_LENGHT    15
-#define PASSWORD_SIZE           5
+#define PASSWORD_SIZE           4
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -51,17 +51,19 @@ asm (".global _printf_float");  // Enable using float with printf
 #define NMEA_GPRMC_INVALID          'V'
 
 // GSM definitions
-#define GSM_BUFFER_SIZE            180
+#define GSM_BUFFER_SIZE            1000
 #define GSM_PWRKEY_DELAY_MS        1200             // 1 sec as per SIM900D DS
 #define GSM_POWERUP_DELAY_MS       5000             // 2.2 sec as per SIM900D DS
 #define AT_OK                      "\r\nOK\r\n"
 #define AT_ERROR                   "\r\nERROR\r\n"
-#define AT_TIMEOUT_MS              2000
+#define AT_CMGL_CONST_PATTERN      "+CMGL: "
+#define AT_SMS_CMD_PATTERN         "\"\r\nCMD "
+#define AT_TIMEOUT_MS              3000
 #define AT_INTERCOMM_DELAY_MS      500
 
 // Default user settings
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
-#define PASSWORD                       "0000"
+#define PASSWORD                       {'0', '0', '0', '0'}
 #define GSM_ATTEMPTS                   5
 #define GSM_NET_TIMEOUT_SEC            500
 #define GPS_FIX_TIMEOUT_SEC            500
@@ -84,7 +86,13 @@ struct settings {
     uint16 GPS_fix_timeout_sec;
     uint32 GPS_fix_improve_delay_ms;
 } user_settings;
-const char default_password[PASSWORD_SIZE] = PASSWORD;
+
+struct cmd  {
+    uint8 cmd;
+    uint32 parameter;
+} ext_cmd;
+
+const uint8 default_password[PASSWORD_SIZE] = PASSWORD;
 
 /* EEPROM storage in work flash, this is defined in Em_EEPROM.c*/
 #if defined (__ICCARM__)
@@ -105,11 +113,6 @@ struct location_data {
     char GPS_HDOP[NMEA_MAX_SIZE];                  // Horizontal dilution of precision
     char GPS_Alt[NMEA_MAX_SIZE];                   // Altitude, Meters, above mean sea level
 };
-
-struct cmd  {
-    uint8 cmd;
-    uint32 parameter;
-} ext_cmd;
 
 char GPS_validity[1];
 char GPS_satellites_count[1];
@@ -208,8 +211,7 @@ int main(void)
         // Load default user settings
         user_settings.GSM_master_phone_num[0] = 0;
         strlcat(user_settings.GSM_master_phone_num, GSM_MASTER_PHONE_NUM, PHONE_NUM_MAX_LENGHT);
-        user_settings.password[0] = 0;
-        strlcat(user_settings.password, PASSWORD, PASSWORD_SIZE);
+        memcpy(user_settings.password, default_password, PASSWORD_SIZE);
         user_settings.GSM_attempts = GSM_ATTEMPTS;
         user_settings.GSM_net_timeout_sec = GSM_NET_TIMEOUT_SEC;
         user_settings.GPS_fix_timeout_sec = GPS_FIX_TIMEOUT_SEC;
@@ -232,6 +234,10 @@ int main(void)
     for(;;)
     {        
         /*********************** GPS *******************************/
+        while(1);
+        
+        GSM_Init();
+        goto debug_point;
         
         // Apply power to GPS
         Pin_GPS_power_Write(POWER_ON);  
@@ -274,6 +280,7 @@ int main(void)
         
         if (GSM_Init() == CYRET_SUCCESS)
         {
+            
             GSM_command[0] = 0;
             if (GPS_validity[0] == NMEA_GPRMC_INVALID)
             {
@@ -327,7 +334,8 @@ int main(void)
         CyDelay(GSM_WAIT_MS);
         
         
-        
+        debug_point:
+        GSM_get_ext_cmd(ext_cmd);
         
         
         // Turn off GSM
@@ -345,6 +353,46 @@ int main(void)
 
 void wake_up_handler()
 {
+}
+
+cystatus GSM_get_ext_cmd(struct cmd ext_cmd)
+{
+    uint8 error = 0;
+    char index[2] = {0};
+    char* SMS_index_pointer = NULL;
+    char* CMD_pointer = NULL;
+    char GSM_responce[GSM_BUFFER_SIZE] = {0};
+    char GSM_command[GSM_BUFFER_SIZE];    
+    //char tmp[20] = {0};
+    
+    error = ATCommand("AT+CMGL=\"REC UNREAD\",1\r", AT_TIMEOUT_MS, GSM_responce);
+        
+    do
+    {        
+        
+        // Find next SMS index
+        SMS_index_pointer = strstr(GSM_responce, AT_CMGL_CONST_PATTERN) + sizeof(AT_CMGL_CONST_PATTERN) - 1;
+        index[0] = *SMS_index_pointer;
+        
+        // Clear GSM_command
+        GSM_command[0] = 0;
+        strcat(GSM_command, "AT+CMGR=");
+        strcat(GSM_command, index);
+        strcat(GSM_command, ",0\r");
+        ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce); 
+        
+//        CMD_pointer = strstr(GSM_responce, AT_SMS_CMD_PATTERN) + sizeof(AT_SMS_CMD_PATTERN) - 1;
+//        if(CMD_pointer != NULL)
+//        {            
+//            strcat(tmp, CMD_pointer);
+//        }        
+    } while(SMS_index_pointer != NULL);
+    
+    //error = ATCommand("AT+CMGD=1, 4\r", AT_TIMEOUT_MS, GSM_responce);
+    
+    //CyDelay(tmp[1]);
+    CyDelay(error);
+    return CYRET_SUCCESS;
 }
 
 cystatus GSM_Init()
@@ -396,8 +444,10 @@ cystatus GSM_Init()
     // Configure GSM module
     if(error == CYRET_SUCCESS)
     {        
-        // Turn on SMS text mode
+        // Switch to SMS text mode
         error = ATCommand("AT+CMGF=1\r", AT_TIMEOUT_MS, GSM_responce);
+        // Switch to SMS GSM coding
+        error += ATCommand("AT+CSCS=\"GSM\"\r", AT_TIMEOUT_MS, GSM_responce);
     }
     
     if(error == CYRET_SUCCESS) return CYRET_SUCCESS;
@@ -411,6 +461,7 @@ cystatus ATCommand(char* command, uint32 timeout, char* response)
     response[0] = 0;
     UART_GSM_UartPutString(command);    
     CyDelay(AT_INTERCOMM_DELAY_MS);
+    if(timeout == 0) return CYRET_SUCCESS;
     while((timeout > 0) & (strstr(GSM_buffer, AT_OK) == NULL))
     {
         if (strstr(GSM_buffer, AT_ERROR) != NULL) return CYRET_UNKNOWN;
