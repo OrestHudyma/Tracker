@@ -51,7 +51,7 @@ asm (".global _printf_float");  // Enable using float with printf
 #define NMEA_GPRMC_INVALID          'V'
 
 // GSM definitions
-#define GSM_BUFFER_SIZE            1000
+#define GSM_BUFFER_SIZE            180
 #define GSM_PWRKEY_DELAY_MS        1200             // 1 sec as per SIM900D DS
 #define GSM_POWERUP_DELAY_MS       5000             // 2.2 sec as per SIM900D DS
 #define AT_OK                      "\r\nOK\r\n"
@@ -127,7 +127,8 @@ uint8 NMEA_pointer;
 char GSM_buffer[GSM_BUFFER_SIZE];
 char GSM_command[GSM_BUFFER_SIZE];
 char GSM_responce[GSM_BUFFER_SIZE];
-uint8 GSM_pointer = 0;
+uint16 GSM_pointer = 0;
+bool GSM_Rx_overflow_flag = false;
 
 void NMEA_handle_packet();
 void NMEA_GetField(char *packet, uint8 field, char *result);
@@ -169,7 +170,16 @@ CY_ISR(GPS_receive)
 
 CY_ISR(GSM_receive)
 {      
-    if (GSM_pointer >= GSM_BUFFER_SIZE) GSM_pointer = 0;
+    // Limit pointer value not to exceed GSM_BUFFER_SIZE (-1 byte for null-termination)
+    if (GSM_pointer >= (GSM_BUFFER_SIZE - 1))
+    {
+        GSM_pointer--;
+        GSM_Rx_overflow_flag = true;
+    }
+    if (GSM_pointer >= (GSM_BUFFER_SIZE - 1)) 
+    {
+        GSM_pointer = 0;
+    }
     GSM_buffer[GSM_pointer] = UART_GSM_UartGetChar();
     GSM_buffer[GSM_pointer + 1] = 0;
     GSM_pointer++;
@@ -234,7 +244,6 @@ int main(void)
     for(;;)
     {        
         /*********************** GPS *******************************/
-        while(1);
         
         GSM_Init();
         goto debug_point;
@@ -357,41 +366,48 @@ void wake_up_handler()
 
 cystatus GSM_get_ext_cmd(struct cmd ext_cmd)
 {
-    uint8 error = 0;
+    cystatus status = CYRET_STARTED;
     char index[2] = {0};
     char* SMS_index_pointer = NULL;
     char* CMD_pointer = NULL;
     char GSM_responce[GSM_BUFFER_SIZE] = {0};
     char GSM_command[GSM_BUFFER_SIZE];    
-    //char tmp[20] = {0};
+    char tmp[20] = {0};
     
-    error = ATCommand("AT+CMGL=\"REC UNREAD\",1\r", AT_TIMEOUT_MS, GSM_responce);
-        
-    do
-    {        
-        
+    while(CMD_pointer == NULL)
+    {    
+        // Get all SMS info
+        status = ATCommand("AT+CMGL=\"ALL\",1\r", AT_TIMEOUT_MS, GSM_responce);
+                
         // Find next SMS index
-        SMS_index_pointer = strstr(GSM_responce, AT_CMGL_CONST_PATTERN) + sizeof(AT_CMGL_CONST_PATTERN) - 1;
+        SMS_index_pointer = strstr(GSM_responce, AT_CMGL_CONST_PATTERN);
+        if(SMS_index_pointer == NULL) return CYRET_EMPTY;
+        SMS_index_pointer+= sizeof(AT_CMGL_CONST_PATTERN) - 1;
         index[0] = *SMS_index_pointer;
+            
         
-        // Clear GSM_command
-        GSM_command[0] = 0;
+        GSM_command[0] = 0; // Clear GSM_command
         strcat(GSM_command, "AT+CMGR=");
         strcat(GSM_command, index);
         strcat(GSM_command, ",0\r");
-        ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce); 
-        
-//        CMD_pointer = strstr(GSM_responce, AT_SMS_CMD_PATTERN) + sizeof(AT_SMS_CMD_PATTERN) - 1;
-//        if(CMD_pointer != NULL)
-//        {            
-//            strcat(tmp, CMD_pointer);
-//        }        
-    } while(SMS_index_pointer != NULL);
+        ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);
+        CMD_pointer = strstr(GSM_responce, AT_SMS_CMD_PATTERN);
+        if(CMD_pointer != NULL)
+        {
+            CMD_pointer += sizeof(AT_SMS_CMD_PATTERN) - 1;
+            strcat(tmp, CMD_pointer);
+        }
+
+        // Remove current SMS
+        GSM_command[0] = 0; // Clear GSM_command
+        strcat(GSM_command, "AT+CMGD=");
+        strcat(GSM_command, index);
+        strcat(GSM_command, "\r");
+        status = ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);
+    }
     
-    //error = ATCommand("AT+CMGD=1, 4\r", AT_TIMEOUT_MS, GSM_responce);
-    
-    //CyDelay(tmp[1]);
-    CyDelay(error);
+    CyDelay(tmp[1]);
+    CyDelay(status);
     return CYRET_SUCCESS;
 }
 
@@ -457,6 +473,7 @@ cystatus GSM_Init()
 cystatus ATCommand(char* command, uint32 timeout, char* response)
 {   
     GSM_pointer = 0;
+    GSM_Rx_overflow_flag = false;
     GSM_buffer[GSM_pointer] = 0;
     response[0] = 0;
     UART_GSM_UartPutString(command);    
@@ -468,11 +485,12 @@ cystatus ATCommand(char* command, uint32 timeout, char* response)
         CyDelayUs(MS_DELAY_US);
         timeout--;
     }
-    if(timeout == 0) return CYRET_TIMEOUT;
+    if((timeout == 0) & !GSM_Rx_overflow_flag) return CYRET_TIMEOUT;
     else 
     {
         strlcpy(response, GSM_buffer, GSM_BUFFER_SIZE);
-        return CYRET_SUCCESS;
+        if(GSM_Rx_overflow_flag) return CYRET_MEMORY;
+        else return CYRET_SUCCESS;
     }
 }
 
