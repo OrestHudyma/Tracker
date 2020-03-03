@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <math.h> 
 #include <stdbool.h>
+#include <assert.h>
 
 asm (".global _printf_float");  // Enable using float with printf
 
@@ -28,6 +29,7 @@ asm (".global _printf_float");  // Enable using float with printf
 #define WCO_FREQ                32768   // Hz
 #define PHONE_NUM_MAX_LENGHT    15
 #define PASSWORD_SIZE           4
+#define WDT_DISABLE_DELAY_MS    100
 
 // NMEA definitions
 #define NMEA_MAX_SIZE             82
@@ -52,14 +54,16 @@ asm (".global _printf_float");  // Enable using float with printf
 #define NMEA_GPRMC_INVALID          'V'
 
 // GSM definitions
-#define GSM_BUFFER_SIZE            180
+#define GSM_BUFFER_SIZE            500
 #define GSM_PWRKEY_DELAY_MS        1200             // 1 sec as per SIM900D DS
 #define GSM_POWERUP_DELAY_MS       5000             // 2.2 sec as per SIM900D DS
+#define GSM_SMS_SEND_DELAY         5000
 #define AT_OK                      "\r\nOK\r\n"
 #define AT_ERROR                   "\r\nERROR\r\n"
 #define AT_CMGL_CONST_PATTERN      "+CMGL: "
 #define AT_SMS_CMD_PATTERN         "\"\r\nCMD "
 #define AT_TIMEOUT_MS              3000
+#define AT_LBS_TIMEOUT             60000
 #define AT_INTERCOMM_DELAY_MS      500
 
 #define EXT_CMD_MAX_SIZE           50
@@ -70,21 +74,31 @@ asm (".global _printf_float");  // Enable using float with printf
 #define GSM_MASTER_PHONE_NUM           "+380633584255"
 #define PASSWORD                       {'0', '0', '0', '0'}
 #define GSM_ATTEMPTS                   5
-#define GSM_NET_TIMEOUT_SEC            500
+#define GSM_NET_TIMEOUT_SEC            100
 #define GPS_FIX_TIMEOUT_SEC            500
 #define GPS_FIX_IMPROVE_DELAY_MS       30000
+#define WAKEUP_PERIOD_SEC              10800
 
 // System settings
-#define OVERALL_TIMEOUT     150     // seconds
+#define OVERALL_TIMEOUT     200     // seconds
 #define POWER_STAB_DELAY    2000    // miliseconds
-#define GSM_WAIT_MS         60000   // miliseconds
+#define GSM_WAIT_MS         150000  // miliseconds
 #define WRONG_PASS_MAX      5
+#define GSM_LBS_ENABLED     true
 
 // External commands
-#define EXTCMD_HELP                 0
-#define EXTCMD_GET_SETTINGS         1
-#define EXTCMD_RESET                2
-#define EXTCMD_HARD_RESET           3
+#define EXTCMD_HELP                         0
+#define EXTCMD_GET_SETTINGS                 1
+#define EXTCMD_RESET                        2
+#define EXTCMD_HARD_RESET                   3
+#define EXTCMD_SET_MPN                      10
+#define EXTCMD_SET_GSM_ATTEMPTS             11
+#define EXTCMD_SET_WAKEUP_PERIOD            12
+#define EXTCMD_SET_GPS_FIX_TIMEOUT          13
+#define EXTCMD_SET_GPS_FIX_IMPROVE_DELAY    14
+#define EXTCMD_SET_PASSWORD                 15
+
+#define HELP_MESSAGE "HELP 0\r GET_SETTINGS 1\r RESET 2\r EXTCMD_HARD_RESET 3\r SET_MPN 10\r SET_GSM_ATTEMPTS 11\r SET_WAKEUP_PERIOD 12\r SET_GPS_FIX_TIMEOUT 13\r SET_GPS_FIX_IMPROVE_DELAY 14\r SET_PASSWORD 15"
 
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
@@ -97,6 +111,7 @@ struct settings {
     uint16 GSM_net_timeout_sec;
     uint16 GPS_fix_timeout_sec;
     uint32 GPS_fix_improve_delay_ms;
+    uint32 wakeup_period_sec;
     bool validity;
 } user_settings;
 
@@ -104,6 +119,7 @@ struct cmd  {
     uint8 cmd;
     uint8 password[PASSWORD_SIZE];
     uint32 parameter;
+    char parameter_str[EXT_CMD_MAX_SIZE];
 } ext_cmd_parsed;
 char ext_cmd_str[GSM_BUFFER_SIZE];
 const uint8 default_password[PASSWORD_SIZE] = PASSWORD;
@@ -151,6 +167,7 @@ void NMEA_native_to_formatted(struct location_data *native, struct location_data
 
 struct location_data loc_native = {"","","","","","",""};
 struct location_data loc_formatted = {"","","","","","",""};
+struct location_data loc_GSM = {"","","","","","",""};
 
 void wake_up_handler();
 cystatus ATCommand(char* command, uint32 timeout, char* responce);
@@ -161,6 +178,15 @@ cystatus GSM_get_ext_cmd(char ext_cmd_str[EXT_CMD_MAX_SIZE]);
 cystatus GSM_parse_cmd(const char ext_cmd_str[EXT_CMD_MAX_SIZE], struct cmd *ext_cmd_parsed);
 cystatus check_number(const char str_number[CMD_ELEMENT_MAX_SIZE]);
 cystatus execute_cmd(struct cmd ext_cmd_parsed);
+uint32 get_WDT_timeout();
+cystatus GSM_location(struct location_data *loc);
+
+CY_ISR(LVD)
+{
+    CySysLvdClearInterrupt();
+    Pin_GPS_power_Write(POWER_OFF);
+    CySysPmStop();
+}
 
 CY_ISR(GPS_receive)
 {    
@@ -211,15 +237,9 @@ int main(void)
     uint8 size;
     cystatus cmd_read_status;
     cystatus cmd_parse_status;
+    cy_en_em_eeprom_status_t eeprom_status;
     
     CyDelay(POWER_STAB_DELAY);
-    for(t = 0; t < 20; t++)
-    {
-        Pin_LED_status_Write(1);
-        CyDelay(100);
-        Pin_LED_status_Write(0);
-        CyDelay(100);
-    }
     
     CyGlobalIntEnable; /* Enable global interrupts. */
     
@@ -234,7 +254,12 @@ int main(void)
     {
         strlcat(event_log, "Reset detected\r", GSM_BUFFER_SIZE);
         hard_reset_detected = false;
-    }        
+    }
+    // Log the reason of the reset
+    if (CySysGetResetReason(CY_SYS_RESET_WDT))  strlcat(event_log, "WDT caused a reset\r", GSM_BUFFER_SIZE);
+    if (CySysGetResetReason(CY_SYS_RESET_PROTFAULT))  strlcat(event_log, "Occured protection violation that requires reset\r", GSM_BUFFER_SIZE);
+    if (CySysGetResetReason(CY_SYS_RESET_SW))  strlcat(event_log, "Cortex-M0 requested a system reset\r", GSM_BUFFER_SIZE);    
+    
     if(hard_reset_detected)
     {
         // Load default user settings
@@ -245,22 +270,41 @@ int main(void)
         user_settings.GSM_net_timeout_sec = GSM_NET_TIMEOUT_SEC;
         user_settings.GPS_fix_timeout_sec = GPS_FIX_TIMEOUT_SEC;
         user_settings.GPS_fix_improve_delay_ms = GPS_FIX_IMPROVE_DELAY_MS;
+        user_settings.wakeup_period_sec = WAKEUP_PERIOD_SEC;
         user_settings.validity = true;
         
-        Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+        eeprom_status = Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+        if(eeprom_status != CY_EM_EEPROM_SUCCESS) strlcat(event_log, "Flash write failure\r", GSM_BUFFER_SIZE);
     }
     else
     {
         // Load user settings from flash
         Em_EEPROM_US_Read(0, &user_settings, sizeof(user_settings));
     }
+    
+    // Configure Watch Dog Timers
+    CySysWdtUnlock();
+    CySysWdtWriteCascade(CY_SYS_WDT_CASCADE_01);
+    CySysWdtSetMode(CY_SYS_WDT_COUNTER0, CY_SYS_WDT_MODE_NONE);
+    CySysWdtSetMode(CY_SYS_WDT_COUNTER1, CY_SYS_WDT_MODE_RESET);
+    CySysWdtSetMatch(CY_SYS_WDT_COUNTER0, WCO_FREQ);
+    CySysWdtSetMatch(CY_SYS_WDT_COUNTER1, get_WDT_timeout());
+    CySysWdtSetClearOnMatch(CY_SYS_WDT_COUNTER0, 1);
+    CySysWdtSetClearOnMatch(CY_SYS_WDT_COUNTER1, 1);
+    CySysWdtEnable(CY_SYS_WDT_COUNTER0_MASK);
+    CySysWdtEnable(CY_SYS_WDT_COUNTER1_MASK);
+    CySysWdtLock();
+    
+    CySysLvdEnable(CY_LVD_THRESHOLD_3_20_V);
+    CySysLvdClearInterrupt();
         
+    isr_lvd_StartEx(LVD);
     isr_GPS_received_StartEx(GPS_receive);
     isr_GSM_received_StartEx(GSM_receive);
     
     UART_GPS_Start();
     UART_GSM_Start();
-    
+        
     for(;;)
     {        
         /*********************** GPS *******************************/
@@ -300,7 +344,6 @@ int main(void)
                
             NMEA_native_to_formatted(&loc_native, &loc_formatted);
         }
-
         
         /*********************** GSM *******************************/
         if (GSM_Init() == CYRET_SUCCESS)
@@ -345,27 +388,44 @@ int main(void)
             strlcat(GSM_command, text_buffer, GSM_BUFFER_SIZE);
             
             SendSMS(GSM_command);
-        }
-        // Wait for GSM send/receive
-        CyDelay(GSM_WAIT_MS);
-                
-        cmd_read_status = CYRET_SUCCESS;
-        while(cmd_read_status == CYRET_SUCCESS)
-        {
-            cmd_read_status = GSM_get_ext_cmd(ext_cmd_str);
-            if(cmd_read_status == CYRET_SUCCESS)
+            
+            if ((GPS_validity[0] == NMEA_GPRMC_INVALID) & GSM_LBS_ENABLED)
             {
-                cmd_parse_status = GSM_parse_cmd(ext_cmd_str, &ext_cmd_parsed);
-                if(cmd_parse_status == CYRET_SUCCESS)
+                GSM_location(&loc_GSM);
+                
+                GSM_command[0] = 0;
+                strlcat(GSM_command, "LBS position:\r", GSM_BUFFER_SIZE);
+                sprintf(text_buffer, "Lat:%s\r", loc_GSM.GPS_lat);
+                strlcat(GSM_command, text_buffer, GSM_BUFFER_SIZE);                
+                sprintf(text_buffer, "Lon:%s\r", loc_GSM.GPS_lon);
+                strlcat(GSM_command, text_buffer, GSM_BUFFER_SIZE);
+                strlcat(GSM_command, "Precision:", GSM_BUFFER_SIZE);
+                strlcat(GSM_command, loc_GSM.GPS_HDOP, GSM_BUFFER_SIZE);
+                sprintf(text_buffer, "\rhttp://maps.google.com/?q=%s,%s", loc_GSM.GPS_lat, loc_GSM.GPS_lon);
+                strlcat(GSM_command, text_buffer, GSM_BUFFER_SIZE);
+                SendSMS(GSM_command);
+            }
+        
+            // Wait for GSM send/receive
+            CyDelay(GSM_WAIT_MS);
+                    
+            cmd_read_status = CYRET_SUCCESS;
+            while(cmd_read_status == CYRET_SUCCESS)
+            {
+                cmd_read_status = GSM_get_ext_cmd(ext_cmd_str);
+                if(cmd_read_status == CYRET_SUCCESS)
                 {
-                    execute_cmd(ext_cmd_parsed);
+                    cmd_parse_status = GSM_parse_cmd(ext_cmd_str, &ext_cmd_parsed);
+                    if(cmd_parse_status == CYRET_SUCCESS)
+                    {
+                        execute_cmd(ext_cmd_parsed);
+                    }
                 }
             }
-        }
-        // Remove all SMS
-        sprintf(GSM_command, "AT+CMGD=1,4\r");
-        ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);
-        
+            // Remove all SMS
+            sprintf(GSM_command, "AT+CMGD=1,4\r");
+            ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);        
+        }        
                 
         // Turn off GSM
         GSM_Power(false);
@@ -373,7 +433,27 @@ int main(void)
         UART_GPS_Sleep();
         UART_GSM_Sleep();
         
+        // Configure WDT to wake up device
+        CySysWdtUnlock();
+        CySysWdtDisable(CY_SYS_WDT_COUNTER0_MASK);
+        CySysWdtDisable(CY_SYS_WDT_COUNTER1_MASK);
+        CyDelay(WDT_DISABLE_DELAY_MS);
+        CySysWdtSetMode(CY_SYS_WDT_COUNTER1, CY_SYS_WDT_MODE_INT);
+        CySysWdtSetMatch(CY_SYS_WDT_COUNTER1, user_settings.wakeup_period_sec);
+        CySysWdtEnable(CY_SYS_WDT_COUNTER0_MASK);
+        CySysWdtEnable(CY_SYS_WDT_COUNTER1_MASK);    
+        
         CySysPmDeepSleep();
+        
+        // Configure WDT to reset if timeout
+        CySysWdtDisable(CY_SYS_WDT_COUNTER0_MASK);
+        CySysWdtDisable(CY_SYS_WDT_COUNTER1_MASK);
+        CyDelay(WDT_DISABLE_DELAY_MS);        
+        CySysWdtSetMode(CY_SYS_WDT_COUNTER1, CY_SYS_WDT_MODE_RESET);
+        CySysWdtSetMatch(CY_SYS_WDT_COUNTER1, get_WDT_timeout());
+        CySysWdtEnable(CY_SYS_WDT_COUNTER0_MASK);
+        CySysWdtEnable(CY_SYS_WDT_COUNTER1_MASK);  
+        CySysWdtLock();
         
         UART_GPS_Wakeup();
         UART_GSM_Wakeup();
@@ -382,6 +462,23 @@ int main(void)
 
 void wake_up_handler()
 {
+}
+
+cystatus GSM_location(struct location_data *loc) // Not tested
+{
+    char GSM_responce[GSM_BUFFER_SIZE];
+    cystatus status = CYRET_STARTED;
+    
+    status = ATCommand("AT+SAPBR=3,1,\"Contype\",\"GPRS\"\r", AT_TIMEOUT_MS, GSM_responce);
+    status += ATCommand("AT+SAPBR=3,1,\"APN\",\"internet\"\r", AT_TIMEOUT_MS, GSM_responce);
+    status += ATCommand("AT+SAPBR=1,1\r", AT_TIMEOUT_MS, GSM_responce);
+    status += ATCommand("AT+SAPBR=2,1\r", AT_TIMEOUT_MS, GSM_responce);
+    
+    // Get current longitude, latitude and precision
+    status += ATCommand("AT+CIPGSMLOC=1,1\r", AT_LBS_TIMEOUT, GSM_responce);
+    status += ATCommand("AT+SAPBR=0,1\r", AT_TIMEOUT_MS, GSM_responce);    
+    sscanf(GSM_responce, "+CLBS: 0,%s,%s,%s\r\n", loc->GPS_lon, loc->GPS_lat, loc->GPS_HDOP);
+    return status;
 }
 
 cystatus execute_cmd(struct cmd ext_cmd)
@@ -402,6 +499,7 @@ cystatus execute_cmd(struct cmd ext_cmd)
     }
     else
     {
+        wrong_pass_count = 0;
         switch(ext_cmd.cmd)
         {
             case EXTCMD_GET_SETTINGS:
@@ -416,6 +514,8 @@ cystatus execute_cmd(struct cmd ext_cmd)
                 sprintf(text_buffer, "GPS_fix_timeout_sec:%u\r", user_settings.GPS_fix_timeout_sec);
                 strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);
                 sprintf(text_buffer, "GPS_fix_improve_delay_ms:%lu\r", user_settings.GPS_fix_improve_delay_ms);
+                strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);
+                sprintf(SMS_buffer, "Wakeup period: %lu seconds (%lu minutes)", ext_cmd.parameter, ext_cmd.parameter / MIN_TO_SEC_RATIO);                
                 strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);
                 sprintf(text_buffer, "Device ID:%lu%lu\r", UniqueId[0], UniqueId[1]);
                 strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);                
@@ -438,7 +538,57 @@ cystatus execute_cmd(struct cmd ext_cmd)
             }
             case EXTCMD_HELP:
             {
-                SendSMS("TODO: help message");
+                SendSMS(HELP_MESSAGE);
+                break;
+            }
+            case EXTCMD_SET_MPN:
+            {
+                sprintf(SMS_buffer, "Changing master phone number to +%s", ext_cmd.parameter_str);
+                SendSMS(SMS_buffer);
+                sprintf(user_settings.GSM_master_phone_num, "+%s", ext_cmd.parameter_str);
+                Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+                sprintf(SMS_buffer, "Master phone number is now set to %s", user_settings.GSM_master_phone_num);
+                SendSMS(SMS_buffer);
+                break;
+            }
+            case EXTCMD_SET_GSM_ATTEMPTS:
+            {
+                user_settings.GSM_attempts = ext_cmd.parameter;
+                Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+                sprintf(SMS_buffer, "Changed GSM attempts to %lu", ext_cmd.parameter);                
+                SendSMS(SMS_buffer);
+                break;
+            }
+            case EXTCMD_SET_WAKEUP_PERIOD:
+            {
+                user_settings.wakeup_period_sec = ext_cmd.parameter;
+                Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+                sprintf(SMS_buffer, "Changed wakeup period to %lu seconds (%lu minutes)", ext_cmd.parameter, ext_cmd.parameter / MIN_TO_SEC_RATIO);                
+                SendSMS(SMS_buffer);
+                break;
+            }
+            case EXTCMD_SET_GPS_FIX_TIMEOUT:
+            {
+                user_settings.GPS_fix_timeout_sec = ext_cmd.parameter;
+                Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+                sprintf(SMS_buffer, "Changed GPS fix timeout to %lu seconds", ext_cmd.parameter);                
+                SendSMS(SMS_buffer);
+                break;
+            }
+            case EXTCMD_SET_GPS_FIX_IMPROVE_DELAY:
+            {
+                user_settings.GPS_fix_improve_delay_ms = ext_cmd.parameter;
+                Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+                sprintf(SMS_buffer, "Changed GPS fix improve delay to %lu seconds", ext_cmd.parameter);                
+                SendSMS(SMS_buffer);
+                break;
+            }
+            case EXTCMD_SET_PASSWORD:
+            {
+                memcpy(user_settings.password, ext_cmd.parameter_str, PASSWORD_SIZE);
+                Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+                sprintf(SMS_buffer, "Changed GPS password to %s", ext_cmd.parameter_str);                
+                SendSMS(SMS_buffer);
                 break;
             }
             default:
@@ -480,6 +630,7 @@ cystatus GSM_parse_cmd(const char ext_cmd_str[EXT_CMD_MAX_SIZE], struct cmd *ext
     ext_cmd_parsed->cmd = atoi(cmd);
     ext_cmd_parsed->parameter = atoi(parameter);
     memcpy(ext_cmd_parsed->password, password, PASSWORD_SIZE);
+    memcpy(ext_cmd_parsed->parameter_str, parameter, EXT_CMD_MAX_SIZE);
         
     return CYRET_SUCCESS;
 }
@@ -497,6 +648,7 @@ cystatus GSM_get_ext_cmd(char ext_cmd_str[EXT_CMD_MAX_SIZE])
     {    
         // Get all SMS info
         status = ATCommand("AT+CMGL=\"ALL\",1\r", AT_TIMEOUT_MS, GSM_responce);
+        if(status != CYRET_SUCCESS) return status;
                 
         // Find next SMS index
         SMS_index_pointer = strstr(GSM_responce, AT_CMGL_CONST_PATTERN);
@@ -506,18 +658,20 @@ cystatus GSM_get_ext_cmd(char ext_cmd_str[EXT_CMD_MAX_SIZE])
         
         // Read SMS and extract command
         sprintf(GSM_command, "AT+CMGR=%c,0\r", index);
-        ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);
+        ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);        
+        if(status != CYRET_SUCCESS) return status;
         CMD_start_pointer = strstr(GSM_responce, AT_SMS_CMD_PATTERN);
         if(CMD_start_pointer != NULL)
         {
             CMD_start_pointer += sizeof(AT_SMS_CMD_PATTERN) - 1;
-            strlcat(ext_cmd_str, CMD_start_pointer, EXT_CMD_MAX_SIZE);
+            strlcpy(ext_cmd_str, CMD_start_pointer, EXT_CMD_MAX_SIZE);
             *strstr(ext_cmd_str, AT_OK) = 0;    // Cut of AT OK with null-terminator
         }
 
         // Remove current SMS
         sprintf(GSM_command, "AT+CMGD=%c\r", index);
-        status = ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);
+        status = ATCommand(GSM_command, AT_TIMEOUT_MS, GSM_responce);        
+        if(status != CYRET_SUCCESS) return status;
     }
     return status;
 }
@@ -639,6 +793,7 @@ cystatus SendSMS(char* SMS_text)
     command[0] = ASCII_SUB;
     command[1] = 0;
     error += ATCommand(command, 0, responce);
+    CyDelay(GSM_SMS_SEND_DELAY);
     if(error == 0) return CYRET_SUCCESS;
     else return CYRET_UNKNOWN;
 }
@@ -737,6 +892,15 @@ cystatus check_number(const char str_number[CMD_ELEMENT_MAX_SIZE])
         if(!isdigit(str_number[i])) return CYRET_BAD_DATA;
     }
     return CYRET_SUCCESS;
+}
+
+uint32 get_WDT_timeout()
+{
+    uint32 t;
+    t = OVERALL_TIMEOUT + user_settings.GSM_net_timeout_sec;
+    t += user_settings.GPS_fix_timeout_sec;
+    t += user_settings.GPS_fix_improve_delay_ms / SEC_DELAY_MS;
+    return t;
 }
 
 /* [] END OF FILE */
