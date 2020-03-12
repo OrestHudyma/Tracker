@@ -61,9 +61,11 @@ asm (".global _printf_float");  // Enable using float with printf
 #define AT_OK                      "\r\nOK\r\n"
 #define AT_ERROR                   "\r\nERROR\r\n"
 #define AT_CMGL_CONST_PATTERN      "+CMGL: "
+#define AT_CUSD_CONST_PATTERN      "+CUSD: 0, \""
 #define AT_SMS_CMD_PATTERN         "\"\r\nCMD "
 #define AT_TIMEOUT_MS              3000
 #define AT_LBS_TIMEOUT             60000
+#define AT_USSD_TIMEOUT            10000
 #define AT_INTERCOMM_DELAY_MS      500
 
 #define EXT_CMD_MAX_SIZE           50
@@ -77,6 +79,7 @@ asm (".global _printf_float");  // Enable using float with printf
 #define GSM_NET_TIMEOUT_SEC            100
 #define GPS_FIX_TIMEOUT_SEC            500
 #define GPS_FIX_IMPROVE_DELAY_MS       30000
+#define GSM_USSD_NUMBER                "111"
 #define WAKEUP_PERIOD_SEC              10800
 
 // System settings
@@ -84,21 +87,23 @@ asm (".global _printf_float");  // Enable using float with printf
 #define POWER_STAB_DELAY    2000    // miliseconds
 #define GSM_WAIT_MS         150000  // miliseconds
 #define WRONG_PASS_MAX      5
-#define GSM_LBS_ENABLED     true
+#define GSM_LBS_ENABLED     false
 
 // External commands
 #define EXTCMD_HELP                         0
 #define EXTCMD_GET_SETTINGS                 1
 #define EXTCMD_RESET                        2
 #define EXTCMD_HARD_RESET                   3
+#define EXTCMD_CHECK_ACCOUNT                4
 #define EXTCMD_SET_MPN                      10
 #define EXTCMD_SET_GSM_ATTEMPTS             11
 #define EXTCMD_SET_WAKEUP_PERIOD            12
 #define EXTCMD_SET_GPS_FIX_TIMEOUT          13
 #define EXTCMD_SET_GPS_FIX_IMPROVE_DELAY    14
 #define EXTCMD_SET_PASSWORD                 15
+#define EXTCMD_SET_USSD_NUMBER              16
 
-#define HELP_MESSAGE "HELP 0\r GET_SETTINGS 1\r RESET 2\r EXTCMD_HARD_RESET 3\r SET_MPN 10\r SET_GSM_ATTEMPTS 11\r SET_WAKEUP_PERIOD 12\r SET_GPS_FIX_TIMEOUT 13\r SET_GPS_FIX_IMPROVE_DELAY 14\r SET_PASSWORD 15"
+#define HELP_MESSAGE "HELP 0\r GET_SETTINGS 1\r RESET 2\r HARD_RESET 3\r CHECK_ACCOUNT 4\r SET_MPN 10\r SET_GSM_ATTEMPTS 11\r SET_WAKEUP_PERIOD 12\r SET_GPS_FIX_TIMEOUT 13\r SET_GPS_FIX_IMPROVE_DELAY 14\r SET_PASSWORD 15\r SET_USSD_NUMBER 16"
 
 #if (AT_INTERCOMM_DELAY_MS > SEC_DELAY_MS)
     #error AT_INTERCOMM_DELAY_MS is higher than SEC_DELAY_MS
@@ -111,6 +116,7 @@ struct settings {
     uint16 GSM_net_timeout_sec;
     uint16 GPS_fix_timeout_sec;
     uint32 GPS_fix_improve_delay_ms;
+    char GSM_USSD_number[PHONE_NUM_MAX_LENGHT];
     uint32 wakeup_period_sec;
     bool validity;
 } user_settings;
@@ -239,6 +245,9 @@ int main(void)
     cystatus cmd_parse_status;
     cy_en_em_eeprom_status_t eeprom_status;
     
+    // Check if user_settings will fit in flash region
+    if(sizeof(user_settings) > Em_EEPROM_US_EEPROM_SIZE) CyHalt(0);
+    
     CyDelay(POWER_STAB_DELAY);
     
     CyGlobalIntEnable; /* Enable global interrupts. */
@@ -265,6 +274,7 @@ int main(void)
         // Load default user settings
         user_settings.GSM_master_phone_num[0] = 0;
         strlcat(user_settings.GSM_master_phone_num, GSM_MASTER_PHONE_NUM, PHONE_NUM_MAX_LENGHT);
+        strlcat(user_settings.GSM_USSD_number, GSM_USSD_NUMBER, PHONE_NUM_MAX_LENGHT);
         memcpy(user_settings.password, default_password, PASSWORD_SIZE);
         user_settings.GSM_attempts = GSM_ATTEMPTS;
         user_settings.GSM_net_timeout_sec = GSM_NET_TIMEOUT_SEC;
@@ -292,7 +302,7 @@ int main(void)
     CySysWdtSetClearOnMatch(CY_SYS_WDT_COUNTER0, 1);
     CySysWdtSetClearOnMatch(CY_SYS_WDT_COUNTER1, 1);
     CySysWdtEnable(CY_SYS_WDT_COUNTER0_MASK);
-    CySysWdtEnable(CY_SYS_WDT_COUNTER1_MASK);
+    //CySysWdtEnable(CY_SYS_WDT_COUNTER1_MASK);
     CySysWdtLock();
     
     CySysLvdEnable(CY_LVD_THRESHOLD_3_20_V);
@@ -476,7 +486,7 @@ cystatus GSM_location(struct location_data *loc) // Not tested
     
     // Get current longitude, latitude and precision
     status += ATCommand("AT+CIPGSMLOC=1,1\r", AT_LBS_TIMEOUT, GSM_responce);
-    status += ATCommand("AT+SAPBR=0,1\r", AT_TIMEOUT_MS, GSM_responce);    
+    status += ATCommand("AT+SAPBR=0,1\r", AT_TIMEOUT_MS, GSM_responce);
     sscanf(GSM_responce, "+CLBS: 0,%s,%s,%s\r\n", loc->GPS_lon, loc->GPS_lat, loc->GPS_HDOP);
     return status;
 }
@@ -485,6 +495,7 @@ cystatus execute_cmd(struct cmd ext_cmd)
 {
     char SMS_buffer[GSM_BUFFER_SIZE] = {0};
     uint32 UniqueId[2] = {0};
+    char * pointer;
     
     // Check password
     if(memcmp(ext_cmd.password, user_settings.password, PASSWORD_SIZE))
@@ -517,6 +528,8 @@ cystatus execute_cmd(struct cmd ext_cmd)
                 strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);
                 sprintf(SMS_buffer, "Wakeup period: %lu seconds (%lu minutes)", ext_cmd.parameter, ext_cmd.parameter / MIN_TO_SEC_RATIO);                
                 strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);
+                sprintf(text_buffer, "USSD number:%s\r", user_settings.GSM_USSD_number);
+                strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);
                 sprintf(text_buffer, "Device ID:%lu%lu\r", UniqueId[0], UniqueId[1]);
                 strlcat(SMS_buffer, text_buffer, GSM_BUFFER_SIZE);                
                 SendSMS(SMS_buffer);                
@@ -539,6 +552,27 @@ cystatus execute_cmd(struct cmd ext_cmd)
             case EXTCMD_HELP:
             {
                 SendSMS(HELP_MESSAGE);
+                break;
+            }
+            case EXTCMD_CHECK_ACCOUNT:
+            {                
+                sprintf(text_buffer, "AT+CUSD=1,\"*%s#\"\r", user_settings.GSM_USSD_number);
+                ATCommand(text_buffer, 0, GSM_responce);
+                CyDelay(AT_USSD_TIMEOUT);
+                GSM_buffer[GSM_pointer] = 0;    // Add null termination to GSM buffer
+                *strstr(GSM_buffer, "\", ") = 0;    // Cut USSD message
+                pointer = strstr(GSM_buffer, AT_CUSD_CONST_PATTERN);
+                strlcpy(text_buffer, pointer + sizeof(AT_CUSD_CONST_PATTERN) - 1, GSM_BUFFER_SIZE);                
+                
+                if (pointer != NULL)
+                {
+                    snprintf(SMS_buffer, GSM_BUFFER_SIZE, "USSD: %s", text_buffer);
+                }
+                else
+                {
+                    sprintf(SMS_buffer, "USSD query failed");
+                }
+                SendSMS(SMS_buffer);
                 break;
             }
             case EXTCMD_SET_MPN:
@@ -588,6 +622,14 @@ cystatus execute_cmd(struct cmd ext_cmd)
                 memcpy(user_settings.password, ext_cmd.parameter_str, PASSWORD_SIZE);
                 Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
                 sprintf(SMS_buffer, "Changed GPS password to %s", ext_cmd.parameter_str);                
+                SendSMS(SMS_buffer);
+                break;
+            }
+            case EXTCMD_SET_USSD_NUMBER:
+            {
+                sprintf(user_settings.GSM_USSD_number, "%s", ext_cmd.parameter_str);
+                Em_EEPROM_US_Write(0, &user_settings, sizeof(user_settings));
+                sprintf(SMS_buffer, "USSD phone number is now set to %s", user_settings.GSM_USSD_number);
                 SendSMS(SMS_buffer);
                 break;
             }
