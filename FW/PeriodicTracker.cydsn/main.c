@@ -319,8 +319,9 @@ int main(void)
     {        
         /*********************** GPS *******************************/
         
-        // Apply power to GPS
-        Pin_GPS_power_Write(POWER_ON);  
+        // Apply power to GPS and wait for it to start
+        Pin_GPS_power_Write(POWER_ON);
+        CyDelay(POWER_STAB_DELAY);
                 
         // Wait for GPS fix
         for(t = 0; t < user_settings.GPS_fix_timeout_sec; t++)
